@@ -62,7 +62,7 @@ await step('finds every failure and gives the right main cause', async () => {
 });
 
 await step('separates normal challenge steps from failures', async () => {
-  const normals = await page.$$eval('details.normals .acard', cs => cs.map(c => c.querySelector('.aurl').textContent));
+  const normals = await page.$$eval('#view-auth details.normals .acard', cs => cs.map(c => c.querySelector('.aurl').textContent));
   assert.equal(normals.length, 4, normals.join('\n'));
   assert.ok(normals.some(u => u.includes('intranet')) && normals.some(u => u.includes('hr.corp')) && normals.filter(u => u.includes('portal.corp')).length === 2);
 });

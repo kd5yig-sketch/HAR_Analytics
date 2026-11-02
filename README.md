@@ -12,9 +12,14 @@ HAR files. It is a single HTML file: no install, no server, no account, no cloud
 2. Open it in Chrome, Edge, Firefox or Safari by double-clicking it.
 3. Drag a `.har` file onto the page, or click **Open HAR…**.
 
-No HAR file handy? Open [`sample/sample.har`](sample/sample.har) (general problems) or
-[`sample/auth-failures.har`](sample/auth-failures.har) (19 authentication scenarios). Both are
-synthetic captures. See [Capturing a HAR](#capturing-a-har) to record your own.
+No HAR file handy? These synthetic captures are in [`sample/`](sample/):
+
+- [`diagnostics.har`](sample/diagnostics.har): one or more examples of every problem the Diagnose tab explains
+- [`auth-failures.har`](sample/auth-failures.har): 19 authentication scenarios
+- [`compare-working.har`](sample/compare-working.har) and [`compare-broken.har`](sample/compare-broken.har): drop both at once to try Compare
+- [`sample.har`](sample/sample.har): a general mix of problems
+
+See [Capturing a HAR](#capturing-a-har) to record your own.
 
 ## Privacy
 
@@ -68,6 +73,52 @@ from a terminal.
 | Warning | Slow server response (waiting > 1 s) or slow request (> 3 s) |
 | Info | Slow DNS (> 200 ms), TCP connect (> 500 ms), TLS (> 500 ms), or queueing (> 500 ms) |
 | Info | Large response (> 1 MB), uncompressed text response (> 2 KB), static asset without caching headers, same URL downloaded more than once |
+
+## Diagnose
+
+The **Diagnose** tab goes beyond flagging problems: it explains each one from the evidence in the
+HAR. Like the Authentication tab, each card shows the most likely cause (with how strong the
+evidence is), other possible causes, the evidence, related requests, and what to try. Repeated
+failures are grouped, and harmless items (a cancelled request, an expected persisted-query miss)
+are kept in a separate "Notes" list.
+
+| Area | What it works out |
+|---|---|
+| **CORS** | The exact header that is wrong: a missing or mismatched `Access-Control-Allow-Origin` (including one cached by a CDN for another origin), several values, `*` used with cookies, a missing `Allow-Credentials`, a method or request header the preflight doesn't allow (`*` never covers `Authorization`), a preflight that fails or redirects, Private Network Access, `Origin: null` after a redirect, and a missing `Vary: Origin` |
+| **Network & TLS errors** | Translates browser errors (`net::ERR_*`, and Firefox equivalents) into plain language: DNS, refused or reset connections, timeouts, expired / untrusted / mismatched certificates, TLS-inspection proxies, proxy tunnels, extensions, CSP / CORP / ORB blocks, HTTP/2 and QUIC failures, truncated responses and more. Groups them by host and detects network outages (several unrelated hosts failing at once) |
+| **Server & gateway errors** | Who produced a 5xx: Cloudflare (52x codes), AWS ALB/ELB, API Gateway, CloudFront, Azure Application Gateway / Front Door, IIS (with sub-status), nginx, Envoy / Istio, HAProxy, Apache, Akamai, Varnish / Fastly, Google Cloud LB, Heroku, Vercel or Kong, or the application itself (with the exception from a stack trace). Detects **fixed timeouts**: failures that all take ~30 s or ~60 s, matched against known defaults (15 s Envoy, 29 s API Gateway, 60 s nginx/ALB, 100 s Cloudflare, 230 s Azure App Service…) |
+| **Rate limiting & retries** | 429s and `Retry-After`, rate-limit headers, the request rate that triggered it, retries sent before `Retry-After`, retry storms without backoff, and tight polling loops |
+| **Hidden failures & API errors** | GraphQL errors inside 200 responses (with error codes, and persisted-query misses recognized as normal), JSON-RPC and gRPC-web errors, `{"success": false}` bodies, an HTML page where JSON was expected ("Unexpected token <"), truncated or malformed JSON, `undefined` / `[object Object]` in URLs, and 400/404/405/413/415/422… with the field errors pulled out and request mistakes spotted (JSON sent as `text/plain`, `//` in paths, API Gateway's misleading "Missing Authentication Token") |
+| **Redirects** | Redirect loops and their pattern (http↔https behind a TLS proxy, www↔non-www, trailing slash, sign-in loops with the cookie that wasn't kept), HTTPS → HTTP downgrades, and POSTs that lost their body on a 301/302 |
+| **WebSockets & streaming** | Failed upgrades (proxy not forwarding WebSockets, origin checks, auth), connections closed by idle timeouts, servers that never send, reconnect loops, and Server-Sent Events delayed by compression or proxy buffering |
+| **Hangs & incomplete requests** | Requests still pending when the HAR was saved, very slow requests and which phase dominated, slow downloads with throughput, and long quiet gaps |
+| **Caching & CDN** | CDN hit ratio for static assets and why they weren't cached (Set-Cookie, private, no-cache, Vary, cache-busting URLs), HTML cached too long, unversioned files cached for a long time, fingerprinted files cached too briefly, responses with `Set-Cookie` served from a shared cache, revalidation storms and service workers |
+| **Page-load performance** | Slow HTML (server time and redirects), render-blocking CSS / scripts, long request chains (from the browser's initiator data), third-party weight, connections not reused, HTTP/1.1 queueing, large images and heavy pages |
+| **Security hygiene** | Tokens and passwords in URLs, personal data in URLs, credentials over plain HTTP, missing HSTS / CSP / nosniff / clickjacking protection, session cookies without HttpOnly, SameSite=None without Secure, Content-Security-Policy violation reports (the only trace of a blocked resource), exposed stack traces and version numbers |
+
+The categories with problems also appear on the Overview and in the Findings list. Each request's
+details get a **Diagnosis** tab, and **Copy / Download report** produces a Markdown summary with
+secrets removed.
+
+## Compare two HARs
+
+Click **Compare…** (or drop two HAR files at once) to compare the open HAR (**A**) with another
+one (**B**), typically a capture where things work against one where they don't. Requests are
+matched by method, host and path, with IDs, UUIDs and hashes treated as placeholders
+(`/orders/42` matches `/orders/57`). The comparison lists **what changed, most likely to matter
+first**:
+
+1. requests that work in A but fail in B, with the header differences on those requests (for
+   example `Authorization: Bearer … → (none)`)
+2. failing requests that only appear in B
+3. steps that happen in A but never in B (for example a token request)
+4. other status changes, hosts that resolved to different server IPs or used a different
+   protocol, and browser or language differences
+5. requests that got much slower
+
+Below that are a side-by-side summary and tables of status changes, header and server
+differences, per-host differences, requests only in A or only in B, and timing differences.
+**Swap A and B** flips the direction.
 
 ## Authentication analysis
 
@@ -142,6 +193,7 @@ You can combine these keys:
 | `larger:100k` | transfer size over 100 KB (`b`, `k`, `m`, `g`) |
 | `slower:500ms` `slower:2s` | total time over |
 | `auth:fail` `auth:any` | requests with an authentication failure / with any authentication information |
+| `diag:any` `diag:error` `diag:cors` `diag:server` … | requests with a diagnosed problem: any, errors only, or a category (`cors`, `network`, `server`, `ratelimit`, `hidden`, `redirect`, `realtime`, `hang`, `cache`, `perf`, `security`) |
 
 Tick **Search headers & bodies** to match words against headers, request bodies and
 response bodies too. For example, find which request returned a particular error message
@@ -194,8 +246,8 @@ npx playwright install chromium
 npm test
 ```
 
-Pass a directory as an argument to `node test/smoke.mjs` or `node test/auth.mjs` to also save
-screenshots. To regenerate the samples after changing them:
+Pass a directory as an argument to any test file (`test/smoke.mjs`, `test/auth.mjs`,
+`test/diagnose.mjs`) to also save screenshots. To regenerate the samples after changing them:
 
 ```bash
 npm run sample
@@ -208,9 +260,12 @@ npm run sample
 | `har-analyzer.html` | The whole application: HTML, CSS and JavaScript in one file |
 | `sample/sample.har` | Synthetic HAR (all `example` domains, fake credentials) for trying it out |
 | `sample/auth-failures.har` | Synthetic HAR with one example of each common authentication failure |
+| `sample/diagnostics.har` | Synthetic HAR with examples of everything the Diagnose tab explains |
+| `sample/compare-*.har` | A working and a broken capture of the same flow, for Compare |
 | `test/smoke.mjs` | End-to-end browser test (Playwright + Chromium) |
 | `test/auth.mjs` | End-to-end test of the authentication analysis |
-| `test/make-sample.mjs`, `test/make-auth-sample.mjs` | Regenerate the sample HARs |
+| `test/diagnose.mjs` | End-to-end test of the Diagnose and Compare tabs |
+| `test/make-*.mjs` | Regenerate the sample HARs |
 
 ## License
 
