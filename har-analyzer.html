@@ -1,0 +1,1185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  Privacy guarantee: this policy forbids the page from loading or sending anything
+  over the network (connect-src 'none', no external scripts, styles, fonts or images).
+  Everything happens inside this file, on this computer.
+-->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'">
+<title>HAR Analyzer</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --panel-2: #f0f2f5; --border: #dde1e7; --text: #1b1f24; --muted: #5f6b7a;
+  --accent: #2563eb; --accent-soft: #dbe6fd; --sel: #e3ecfd;
+  --err: #c62828; --err-soft: #fde8e8; --warn: #a15c00; --warn-soft: #fff1d6; --info: #2f6f9f; --info-soft: #e3f0fa; --ok: #1e7b34;
+  --t-blocked: #b0b7c3; --t-dns: #14a3a3; --t-connect: #e8891d; --t-ssl: #b05ad6; --t-send: #6aa84f; --t-wait: #2f80ed; --t-receive: #1c3f94;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12151a; --panel: #1a1e25; --panel-2: #222731; --border: #2f3541; --text: #e6e9ee; --muted: #9aa4b2;
+    --accent: #6c9cff; --accent-soft: #24345a; --sel: #253457;
+    --err: #ff7b7b; --err-soft: #3d1f22; --warn: #f0b354; --warn-soft: #3a2f1a; --info: #7cc0f0; --info-soft: #1c2f40; --ok: #6fd28a;
+    --t-blocked: #5d6573; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12151a; --panel: #1a1e25; --panel-2: #222731; --border: #2f3541; --text: #e6e9ee; --muted: #9aa4b2;
+  --accent: #6c9cff; --accent-soft: #24345a; --sel: #253457;
+  --err: #ff7b7b; --err-soft: #3d1f22; --warn: #f0b354; --warn-soft: #3a2f1a; --info: #7cc0f0; --info-soft: #1c2f40; --ok: #6fd28a;
+  --t-blocked: #5d6573; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--text); font: 13px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; display: flex; flex-direction: column; overflow: hidden; }
+button, select, input { font: inherit; color: inherit; }
+button { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+select, input[type="search"], input[type="text"] { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
+input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+a { color: var(--accent); }
+.mono { font-family: var(--mono); font-size: 12px; }
+.muted { color: var(--muted); }
+.hidden { display: none !important; }
+
+header { display: flex; align-items: center; gap: 14px; padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+header h1 { font-size: 15px; margin: 0; white-space: nowrap; }
+#fileinfo { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40ch; }
+nav.tabs { display: flex; gap: 2px; }
+nav.tabs button { border: none; background: none; padding: 6px 12px; border-radius: 6px; color: var(--muted); }
+nav.tabs button.active { background: var(--accent-soft); color: var(--text); font-weight: 600; }
+nav.tabs button:disabled { opacity: .4; cursor: default; }
+.spacer { flex: 1; }
+.badge { display: inline-block; min-width: 18px; padding: 0 5px; border-radius: 9px; font-size: 11px; text-align: center; background: var(--panel-2); color: var(--muted); margin-left: 4px; }
+.badge.err { background: var(--err-soft); color: var(--err); }
+.badge.warn { background: var(--warn-soft); color: var(--warn); }
+
+main { flex: 1; min-height: 0; position: relative; }
+section.view { position: absolute; inset: 0; overflow: auto; }
+
+/* Empty state */
+#empty { display: flex; align-items: center; justify-content: center; padding: 16px; }
+.drop { max-width: 560px; width: 100%; text-align: center; border: 2px dashed var(--border); border-radius: 14px; padding: 40px 24px; background: var(--panel); }
+.drop h2 { margin: 0 0 8px; font-size: 20px; }
+.drop p { margin: 8px 0; color: var(--muted); }
+.drop .how { text-align: left; font-size: 12px; margin-top: 22px; color: var(--muted); }
+.drop .how summary { cursor: pointer; }
+body.dragging .drop { border-color: var(--accent); background: var(--accent-soft); }
+.lock { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--ok); margin-top: 14px; }
+#loaderr { color: var(--err); margin-top: 12px; white-space: pre-wrap; }
+
+/* Overview */
+.ov { padding: 16px; display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); align-content: start; }
+.cards { grid-column: 1 / -1; display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+.card .v { font-size: 20px; font-weight: 650; }
+.card .l { color: var(--muted); font-size: 12px; }
+.card.err .v { color: var(--err); }
+.card.warn .v { color: var(--warn); }
+.box { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; min-width: 0; }
+.box h3 { margin: 0 0 8px; font-size: 13px; }
+.box.wide { grid-column: 1 / -1; }
+table.simple { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+table.simple th, table.simple td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--border); vertical-align: top; overflow: hidden; text-overflow: ellipsis; }
+table.simple th { color: var(--muted); font-weight: 500; }
+table.simple td.num, table.simple th.num { text-align: right; white-space: nowrap; }
+table.simple tr.click { cursor: pointer; }
+table.simple tr.click:hover td { background: var(--panel-2); }
+td.url { white-space: nowrap; font-family: var(--mono); }
+.barrow { display: grid; grid-template-columns: 110px 1fr 54px; gap: 8px; align-items: center; font-size: 12px; margin: 3px 0; }
+.barrow .track { background: var(--panel-2); height: 10px; border-radius: 5px; overflow: hidden; }
+.barrow .fill { height: 100%; background: var(--accent); border-radius: 5px; }
+.barrow .n { text-align: right; color: var(--muted); }
+.sev { display: inline-block; font-size: 11px; font-weight: 600; padding: 0 6px; border-radius: 4px; text-transform: uppercase; letter-spacing: .02em; }
+.sev.error { background: var(--err-soft); color: var(--err); }
+.sev.warn { background: var(--warn-soft); color: var(--warn); }
+.sev.info { background: var(--info-soft); color: var(--info); }
+.allgood { color: var(--ok); }
+
+/* Requests view */
+#view-requests { display: flex; flex-direction: column; overflow: hidden; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--border); }
+.toolbar #q { width: 320px; max-width: 100%; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chip { padding: 2px 9px; border-radius: 12px; font-size: 12px; }
+.chip.on { background: var(--accent-soft); border-color: var(--accent); }
+.toolbar label { display: inline-flex; gap: 4px; align-items: center; font-size: 12px; white-space: nowrap; }
+#count { color: var(--muted); font-size: 12px; margin-left: auto; white-space: nowrap; }
+.split { flex: 1; min-height: 0; display: flex; }
+.tablewrap { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.grid-row { display: grid; grid-template-columns: 46px 58px 62px minmax(110px, 1.1fr) minmax(160px, 3fr) 84px 70px 70px minmax(140px, 2fr); align-items: center; }
+.split.has-detail .grid-row { grid-template-columns: 46px 58px 62px minmax(120px, 1fr) 70px 70px; }
+.split.has-detail .c-domain, .split.has-detail .c-type, .split.has-detail .c-wf { display: none; }
+.thead { background: var(--panel-2); border-bottom: 1px solid var(--border); font-size: 12px; color: var(--muted); user-select: none; }
+.thead > div { padding: 5px 6px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.thead > div:hover { color: var(--text); }
+.thead > div.sorted { color: var(--text); font-weight: 600; }
+#rows { flex: 1; overflow-y: auto; overflow-x: hidden; position: relative; outline: none; }
+#rows-inner { position: relative; }
+.row { position: absolute; left: 0; right: 0; height: 26px; border-bottom: 1px solid var(--border); cursor: pointer; font-size: 12px; }
+.row > div { padding: 0 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row:hover { background: var(--panel-2); }
+.row.sel { background: var(--sel); }
+.row.st-err { color: var(--err); }
+.row.st-warn { color: var(--warn); }
+.row .c-path { font-family: var(--mono); font-size: 12px; }
+.row .c-size, .row .c-time, .thead .c-size, .thead .c-time { text-align: right; }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 4px; vertical-align: 1px; }
+.dot.error { background: var(--err); } .dot.warn { background: var(--warn); } .dot.info { background: var(--info); }
+.wf { position: relative; height: 12px; }
+.wf .bar { position: absolute; top: 0; height: 12px; display: flex; min-width: 2px; border-radius: 2px; overflow: hidden; background: var(--t-blocked); }
+.wf .bar > span { height: 100%; }
+.ph-blocked { background: var(--t-blocked); } .ph-dns { background: var(--t-dns); } .ph-connect { background: var(--t-connect); }
+.ph-ssl { background: var(--t-ssl); } .ph-send { background: var(--t-send); } .ph-wait { background: var(--t-wait); } .ph-receive { background: var(--t-receive); }
+.nomatch { padding: 30px; text-align: center; color: var(--muted); }
+
+/* Detail pane */
+#detail { width: 52%; max-width: 900px; min-width: 360px; border-left: 1px solid var(--border); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+.dhead { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.dhead .top { display: flex; gap: 8px; align-items: center; }
+.dhead .url { font-family: var(--mono); font-size: 12px; word-break: break-all; margin-top: 6px; user-select: text; }
+.status-pill { font-weight: 650; padding: 1px 8px; border-radius: 10px; background: var(--panel-2); }
+.status-pill.ok { color: var(--ok); } .status-pill.err { color: var(--err); background: var(--err-soft); } .status-pill.warn { color: var(--warn); background: var(--warn-soft); }
+.dtabs { display: flex; gap: 2px; padding: 0 8px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+.dtabs button { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 7px 10px; color: var(--muted); white-space: nowrap; }
+.dtabs button.active { border-bottom-color: var(--accent); color: var(--text); font-weight: 600; }
+.dbody { flex: 1; overflow: auto; padding: 12px; min-height: 0; }
+.dbody h4 { margin: 14px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.dbody h4:first-child { margin-top: 0; }
+.kv { display: grid; grid-template-columns: minmax(120px, 34%) 1fr; font-size: 12px; border-top: 1px solid var(--border); }
+.kv > div { padding: 3px 6px; border-bottom: 1px solid var(--border); word-break: break-all; user-select: text; }
+.kv > .k { color: var(--muted); font-family: var(--mono); word-break: break-word; }
+.kv > .v { font-family: var(--mono); }
+pre.body { margin: 0; padding: 10px; background: var(--panel-2); border-radius: 6px; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-all; user-select: text; max-height: none; }
+.note { font-size: 12px; color: var(--muted); margin: 6px 0; }
+.imgprev { min-width: 48px; image-rendering: pixelated; max-width: 100%; max-height: 400px; background: repeating-conic-gradient(#ccc 0 25%, #fff 0 50%) 0 0 / 16px 16px; border: 1px solid var(--border); }
+.trow { display: grid; grid-template-columns: 120px 1fr 80px; gap: 8px; align-items: center; font-size: 12px; margin: 4px 0; }
+.trow .track { position: relative; height: 12px; background: var(--panel-2); border-radius: 3px; }
+.trow .track span { position: absolute; top: 0; height: 12px; min-width: 2px; border-radius: 2px; }
+.trow .n { text-align: right; font-family: var(--mono); }
+.legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 11px; color: var(--muted); margin-top: 8px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.finding { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
+.finding .t { font-weight: 600; }
+.finding p { margin: 4px 0 0; font-size: 12px; color: var(--muted); }
+.chain { font-family: var(--mono); font-size: 12px; }
+.chain div { padding: 2px 0; word-break: break-all; }
+
+/* Findings view */
+.fv { padding: 16px; max-width: 1200px; }
+.fv details { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 10px; }
+.fv summary { padding: 10px 12px; cursor: pointer; display: flex; gap: 10px; align-items: center; }
+.fv summary .t { font-weight: 600; flex: 1; }
+.fv .help { padding: 0 12px 8px; color: var(--muted); font-size: 12px; margin: 0; }
+.fv table { margin: 0 0 8px; }
+.fv .more { padding: 0 12px 10px; font-size: 12px; }
+
+dialog { border: 1px solid var(--border); border-radius: 12px; background: var(--panel); color: var(--text); max-width: 520px; width: calc(100% - 32px); padding: 18px; }
+dialog::backdrop { background: rgba(0,0,0,.4); }
+dialog h3 { margin: 0 0 6px; }
+dialog label { display: flex; gap: 8px; align-items: flex-start; margin: 8px 0; }
+dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+#toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 6px 14px; border-radius: 8px; font-size: 12px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+#toast.show { opacity: .92; }
+
+@media (max-width: 900px) {
+  #detail { position: absolute; inset: 0; width: auto; max-width: none; min-width: 0; z-index: 5; }
+  .grid-row { grid-template-columns: 40px 50px 56px minmax(140px, 1fr) 64px 64px; }
+  .c-domain, .c-type, .c-wf { display: none; }
+  .toolbar #q { width: 100%; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>HAR Analyzer</h1>
+  <nav class="tabs" id="tabs">
+    <button data-view="overview" disabled>Overview</button>
+    <button data-view="requests" disabled>Requests <span class="badge" id="b-req">0</span></button>
+    <button data-view="findings" disabled>Findings <span class="badge" id="b-find">0</span></button>
+  </nav>
+  <span id="fileinfo"></span>
+  <span class="spacer"></span>
+  <button id="btn-open" class="primary" title="Open a .har file">Open HAR…</button>
+  <button id="btn-export" disabled title="Export a redacted HAR or a CSV of the request list">Export…</button>
+  <button id="btn-theme" title="Switch between light and dark">Theme</button>
+  <input type="file" id="file" accept=".har,.json,application/json" hidden>
+</header>
+
+<main>
+  <section class="view" id="empty">
+    <div class="drop">
+      <h2>Drop a HAR file here</h2>
+      <p>or <button id="btn-open2" class="primary">choose a file…</button></p>
+      <p>Inspect every request, see where the time went, and get a list of likely problems: failed requests, server errors, CORS and mixed-content issues, slow DNS/TLS/server responses, redirect chains and more.</p>
+      <div class="lock">🔒 Runs entirely on this computer. This page cannot make network connections; your HAR is never uploaded.</div>
+      <div id="loaderr"></div>
+      <details class="how">
+        <summary>How do I capture a HAR file?</summary>
+        <p><b>Chrome / Edge:</b> open DevTools (F12) → Network tab → tick “Preserve log” → reproduce the problem → click the download arrow (“Export HAR”).<br>
+        <b>Firefox:</b> DevTools (F12) → Network → reproduce → gear icon → “Save All As HAR”.<br>
+        <b>Safari:</b> Develop → Show Web Inspector → Network → reproduce → “Export”.<br>
+        Proxies such as Fiddler, Charles, mitmproxy and Burp can also export HAR.</p>
+        <p>HAR files can contain passwords, cookies and tokens. Use <b>Export → Redacted HAR</b> before sharing one with anyone.</p>
+      </details>
+    </div>
+  </section>
+
+  <section class="view hidden" id="view-overview"></section>
+
+  <section class="view hidden" id="view-requests">
+    <div class="toolbar">
+      <input type="search" id="q" placeholder="Filter URLs…   e.g.  api  status:5xx  -cdn  slower:1s" title="Words match the URL. Prefix with - to exclude.&#10;Keys: status:404 status:4xx status:failed method:POST domain:example type:xhr mime:json larger:100k slower:500ms&#10;Press / to focus.">
+      <select id="f-status" title="Status">
+        <option value="">All statuses</option>
+        <option value="errors">Errors (4xx, 5xx, failed)</option>
+        <option value="failed">Failed (no response)</option>
+        <option value="2">2xx</option><option value="3">3xx</option><option value="4">4xx</option><option value="5">5xx</option>
+      </select>
+      <select id="f-domain" title="Domain"><option value="">All domains</option></select>
+      <select id="f-page" title="Page" class="hidden"><option value="">All pages</option></select>
+      <div class="chips" id="type-chips"></div>
+      <label title="Show only requests with findings"><input type="checkbox" id="f-issues"> With findings</label>
+      <label title="Also search headers and bodies"><input type="checkbox" id="f-deep"> Search headers &amp; bodies</label>
+      <span id="count"></span>
+    </div>
+    <div class="split" id="split">
+      <div class="tablewrap">
+        <div class="grid-row thead" id="thead">
+          <div class="c-idx" data-key="i">#</div>
+          <div class="c-status" data-key="status">Status</div>
+          <div class="c-method" data-key="method">Method</div>
+          <div class="c-domain" data-key="host">Domain</div>
+          <div class="c-path" data-key="path">Path</div>
+          <div class="c-type" data-key="type">Type</div>
+          <div class="c-size" data-key="transfer">Size</div>
+          <div class="c-time" data-key="time">Time</div>
+          <div class="c-wf" data-key="start">Waterfall</div>
+        </div>
+        <div id="rows" tabindex="0"><div id="rows-inner"></div></div>
+      </div>
+      <aside id="detail" class="hidden"></aside>
+    </div>
+  </section>
+
+  <section class="view hidden" id="view-findings"></section>
+</main>
+
+<dialog id="dlg-export">
+  <h3>Export</h3>
+  <p class="muted" style="margin:0 0 10px">Files are created on this computer and saved through your browser’s normal download.</p>
+  <h4 style="margin:12px 0 4px">Redacted HAR (safe to share)</h4>
+  <label><input type="checkbox" checked disabled> Mask Authorization, Cookie, Set-Cookie, API-key and CSRF headers, and all cookie values</label>
+  <label><input type="checkbox" id="x-params" checked> Mask token-like URL and form parameters and JSON fields (token, key, secret, password, session, signature, code…)</label>
+  <label><input type="checkbox" id="x-reqbody"> Remove request bodies entirely</label>
+  <label><input type="checkbox" id="x-resbody" checked> Remove response bodies</label>
+  <div class="actions">
+    <button id="x-csv">Request list as CSV</button>
+    <span class="spacer"></span>
+    <button id="x-cancel">Cancel</button>
+    <button id="x-har" class="primary">Download redacted HAR</button>
+  </div>
+</dialog>
+<div id="toast"></div>
+
+<script>
+'use strict';
+
+/* ---------- small helpers ---------- */
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  if (attrs) for (const [k, v] of Object.entries(attrs)) {
+    if (v == null || v === false) continue;
+    if (k === 'class') el.className = v;
+    else if (k === 'text') el.textContent = v;
+    else if (k === 'style') { for (const [p, pv] of Object.entries(v)) el.style.setProperty(p, pv); }
+    else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v === true ? '' : v);
+  }
+  for (const c of kids.flat(Infinity)) {
+    if (c == null || c === false) continue;
+    el.append(c instanceof Node ? c : String(c));
+  }
+  return el;
+}
+const pos = n => (typeof n === 'number' && n > 0 ? n : 0);
+function fmtBytes(n) {
+  if (n == null || n < 0 || isNaN(n)) return '—';
+  if (n < 1024) return n + ' B';
+  const u = ['KB', 'MB', 'GB']; let i = -1;
+  do { n /= 1024; i++; } while (n >= 1024 && i < u.length - 1);
+  return n.toFixed(n < 10 ? 1 : 0) + ' ' + u[i];
+}
+function fmtMs(ms) {
+  if (ms == null || ms < 0 || isNaN(ms)) return '—';
+  if (ms === 0) return '0 ms';
+  if (ms < 1) return ms.toFixed(2) + ' ms';
+  if (ms < 1000) return Math.round(ms) + ' ms';
+  return (ms / 1000).toFixed(ms < 10000 ? 2 : 1) + ' s';
+}
+function hdr(list, name) {
+  if (!Array.isArray(list)) return '';
+  name = name.toLowerCase();
+  const f = list.find(x => x && String(x.name).toLowerCase() === name);
+  return f ? String(f.value ?? '') : '';
+}
+function hdrAll(list, name) {
+  if (!Array.isArray(list)) return [];
+  name = name.toLowerCase();
+  return list.filter(x => x && String(x.name).toLowerCase() === name).map(x => String(x.value ?? ''));
+}
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 1600);
+}
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); toast('Copied to clipboard'); return; } catch (_) { /* fall back */ }
+  const ta = h('textarea', { style: { position: 'fixed', opacity: '0' } }); ta.value = text;
+  document.body.append(ta); ta.select();
+  try { document.execCommand('copy'); toast('Copied to clipboard'); } catch (_) { toast('Copy failed'); }
+  ta.remove();
+}
+function download(name, text, type) {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const a = h('a', { href: url, download: name }); document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+/* ---------- state ---------- */
+const S = {
+  fileName: '', har: null, pages: [], entries: [], findings: [], filtered: [],
+  sort: { key: 'start', dir: 1 }, types: new Set(), selected: null, view: 'overview', dtab: 'headers'
+};
+
+/* ---------- classification ---------- */
+const TYPE_LABEL = { doc: 'Document', xhr: 'XHR / Fetch', js: 'Script', css: 'Stylesheet', img: 'Image', font: 'Font', media: 'Media', ws: 'WebSocket', other: 'Other' };
+const RT_MAP = { document: 'doc', script: 'js', stylesheet: 'css', image: 'img', font: 'font', xhr: 'xhr', fetch: 'xhr', preflight: 'xhr', eventsource: 'xhr', media: 'media', websocket: 'ws' };
+function classify(e, mime, u) {
+  const rt = String(e._resourceType || '').toLowerCase();
+  if (RT_MAP[rt]) return RT_MAP[rt];
+  if (rt) return 'other';
+  const m = mime.toLowerCase();
+  if (m.includes('html')) return 'doc';
+  if (m.includes('javascript') || m.includes('ecmascript')) return 'js';
+  if (m.includes('css')) return 'css';
+  if (m.startsWith('image/')) return 'img';
+  if (m.startsWith('font/') || m.includes('woff') || m.includes('opentype') || m.includes('truetype')) return 'font';
+  if (m.startsWith('audio/') || m.startsWith('video/')) return 'media';
+  if (m.includes('json') || m.includes('xml') || m.includes('grpc') || m.includes('protobuf')) return 'xhr';
+  const ext = u ? (u.pathname.match(/\.([a-z0-9]+)$/i) || [])[1] : '';
+  if (ext) {
+    const x = ext.toLowerCase();
+    if (/^(js|mjs)$/.test(x)) return 'js';
+    if (x === 'css') return 'css';
+    if (/^(png|jpe?g|gif|webp|avif|svg|ico|bmp)$/.test(x)) return 'img';
+    if (/^(woff2?|ttf|otf|eot)$/.test(x)) return 'font';
+    if (/^(mp4|webm|mp3|m4a|ogg|wav|m3u8|ts)$/.test(x)) return 'media';
+    if (/^(html?)$/.test(x)) return 'doc';
+  }
+  if (u && /^wss?:$/.test(u.protocol)) return 'ws';
+  return 'other';
+}
+const isFailed = e => e.status === 0;
+function statusClass(e) {
+  if (isFailed(e) || e.status >= 500) return 'err';
+  if (e.status >= 400) return 'warn';
+  return 'ok';
+}
+const isTextMime = m => /^text\/|json|javascript|ecmascript|xml|svg|x-www-form-urlencoded|graphql/i.test(m);
+
+/* ---------- loading & normalising ---------- */
+function normalize(har) {
+  const log = har && har.log;
+  if (!log || !Array.isArray(log.entries)) throw new Error('This file does not look like a HAR: it has no "log.entries" list.');
+  const pages = Array.isArray(log.pages) ? log.pages : [];
+  const starts = log.entries.map(e => Date.parse(e && e.startedDateTime));
+  let base = Infinity;
+  for (const t of starts) if (!isNaN(t) && t < base) base = t;
+  if (base === Infinity) base = 0;
+  const entries = log.entries.map((e, i) => {
+    e = e || {};
+    const req = e.request || {}, res = e.response || {}, content = res.content || {};
+    const url = String(req.url || '');
+    let u = null; try { u = new URL(url); } catch (_) { /* not a URL */ }
+    const t = e.timings || {};
+    const timings = { blocked: pos(t.blocked), dns: pos(t.dns), connect: pos(t.connect), ssl: pos(t.ssl), send: pos(t.send), wait: pos(t.wait), receive: pos(t.receive) };
+    // Per the HAR spec, ssl time is included in connect time.
+    timings.tcp = Math.max(0, timings.connect - timings.ssl);
+    const phaseSum = timings.blocked + timings.dns + timings.connect + timings.send + timings.wait + timings.receive;
+    const mime = String(content.mimeType || hdr(res.headers, 'content-type') || '').split(';')[0].trim();
+    const transfer = typeof res._transferSize === 'number' && res._transferSize >= 0 ? res._transferSize : pos(res.headersSize) + pos(res.bodySize);
+    return {
+      i: i + 1, raw: e, method: String(req.method || 'GET').toUpperCase(), url, u,
+      host: u ? u.host : '', path: u ? (u.pathname + u.search) : url,
+      status: typeof res.status === 'number' ? res.status : (parseInt(res.status, 10) || 0),
+      statusText: String(res.statusText || ''), error: String(res._error || e._error || ''),
+      mime, type: classify(e, mime, u), transfer, contentSize: pos(content.size),
+      time: typeof e.time === 'number' && e.time >= 0 ? e.time : phaseSum,
+      start: isNaN(starts[i]) ? 0 : starts[i] - base, timings,
+      httpVersion: String(res.httpVersion || req.httpVersion || ''), serverIP: String(e.serverIPAddress || ''),
+      connection: String(e.connection || ''), pageref: String(e.pageref || ''),
+      fromCache: e._fromCache ? String(e._fromCache) : (e.cache && (e.cache.beforeRequest || e.cache.afterRequest) && res.status !== 304 && transfer === 0 ? 'cache' : ''),
+      findings: [], redirectTo: null, redirectFrom: null, _hay: null
+    };
+  });
+  return { pages, entries, base };
+}
+
+function loadText(text, name) {
+  $('#loaderr').textContent = '';
+  let har;
+  try { har = JSON.parse(text.replace(/^﻿/, '')); }
+  catch (err) { showLoadError('Could not read ' + name + ' as JSON.\n' + err.message); return; }
+  let n;
+  try { n = normalize(har); } catch (err) { showLoadError(err.message); return; }
+  Object.assign(S, { fileName: name, har, pages: n.pages, entries: n.entries, base: n.base, selected: null, types: new Set(), sort: { key: 'start', dir: 1 } });
+  analyze();
+  setupFilters();
+  const creator = har.log.creator ? [har.log.creator.name, har.log.creator.version].filter(Boolean).join(' ') : '';
+  $('#fileinfo').textContent = name + ' · ' + S.entries.length + ' requests' + (creator ? ' · ' + creator : '');
+  $('#fileinfo').title = $('#fileinfo').textContent;
+  $$('#tabs button').forEach(b => (b.disabled = false));
+  $('#btn-export').disabled = false;
+  $('#b-req').textContent = S.entries.length;
+  const errs = S.findings.filter(f => f.sev === 'error').length, warns = S.findings.filter(f => f.sev === 'warn').length;
+  const bf = $('#b-find'); bf.textContent = S.findings.length; bf.className = 'badge' + (errs ? ' err' : warns ? ' warn' : '');
+  renderOverview(); renderFindings(); applyFilters();
+  show('overview');
+}
+function showLoadError(msg) { show('empty'); $('#loaderr').textContent = msg; }
+function readFile(file) {
+  if (!file) return;
+  const r = new FileReader();
+  r.onload = () => loadText(String(r.result), file.name);
+  r.onerror = () => showLoadError('Could not read the file: ' + (r.error && r.error.message));
+  r.readAsText(file);
+}
+
+/* ---------- analysis ---------- */
+const RULES = {
+  failed: { sev: 'error', title: 'Request failed (no HTTP response)', help: 'The browser never received a response. Usual causes: DNS failure, connection refused/reset/timed out, TLS or certificate error, the request was blocked (CORS, CSP, mixed content, an extension or firewall), or it was cancelled by navigation. The error text, when the browser recorded one, says which.' },
+  preflight: { sev: 'error', title: 'CORS preflight failed', help: 'An OPTIONS preflight did not return a 2xx status, so the browser blocks the real cross-origin request. The server (or a proxy/WAF in front of it) must answer OPTIONS with 2xx and the right Access-Control-Allow-* headers.' },
+  server_error: { sev: 'error', title: 'Server error (5xx)', help: '500: unhandled error in the app. 502/504: a gateway, load balancer or proxy could not reach (or timed out waiting for) the upstream server. 503: overloaded or in maintenance. Check server logs at the time shown.' },
+  client_error: { sev: 'warn', title: 'Client error (4xx)', help: '400/422: the server rejected the request data. 401: not authenticated (missing/expired token or cookie). 403: authenticated but not allowed, or blocked by a WAF. 404: wrong URL or missing resource. 405: wrong method. 413: payload too large. 429: rate limited.' },
+  cors: { sev: 'warn', title: 'Cross-origin response without Access-Control-Allow-Origin', help: 'The request carried an Origin header for a different origin, but the response has no Access-Control-Allow-Origin header. Scripts on the page will not be able to read this response.' },
+  mixed: { sev: 'warn', title: 'Mixed content (HTTP request from an HTTPS page)', help: 'Browsers block or warn about insecure HTTP subresources on HTTPS pages. Load these over HTTPS.' },
+  redirect_chain: { sev: 'warn', title: 'Redirect chain (2 or more redirects)', help: 'Each redirect costs a full round trip, and loops or long chains often point at misconfigured http→https, www/non-www or login redirects. Link directly to the final URL.' },
+  insecure_cookie: { sev: 'warn', title: 'Cookie set without the Secure flag over HTTPS', help: 'Cookies without Secure can be sent over plain HTTP. Cookies with SameSite=None are rejected by browsers unless they are also Secure.' },
+  slow_ttfb: { sev: 'warn', title: 'Slow server response (waiting > 1 s)', help: '“Waiting” (time to first byte) is mostly time the server spent producing the response, plus one network round trip. Look at server-side processing, database queries or upstream calls.' },
+  slow_total: { sev: 'warn', title: 'Slow request (> 3 s total)', help: 'The whole request took more than 3 seconds. See its Timing tab to find which phase dominated.' },
+  slow_dns: { sev: 'info', title: 'Slow DNS lookup (> 200 ms)', help: 'Resolving the host name was slow. Check the DNS resolver, or use dns-prefetch / preconnect hints.' },
+  slow_connect: { sev: 'info', title: 'Slow TCP connect (> 500 ms)', help: 'Establishing the TCP connection was slow: high latency, packet loss, or an overloaded server/load balancer.' },
+  slow_tls: { sev: 'info', title: 'Slow TLS handshake (> 500 ms)', help: 'The TLS handshake was slow. Check latency, certificate chain size, OCSP stapling and TLS 1.3 / session resumption support.' },
+  queued: { sev: 'info', title: 'Queued / stalled before sending (> 500 ms)', help: 'The request waited before it could be sent. With HTTP/1.1 browsers open about 6 connections per host, so many parallel requests queue up. HTTP/2 or fewer requests help.' },
+  large: { sev: 'info', title: 'Large response (> 1 MB)', help: 'Large responses slow down loading on slower links. Consider compression, pagination, smaller images or lazy loading.' },
+  uncompressed: { sev: 'info', title: 'Text response sent without compression', help: 'A text-based response over 2 KB had no Content-Encoding. Enabling gzip or brotli usually shrinks these by 60–80%.' },
+  no_cache: { sev: 'info', title: 'Static asset without caching headers', help: 'No Cache-Control or Expires header, so browsers must guess how long to cache it. Set an explicit Cache-Control.' },
+  duplicate: { sev: 'info', title: 'Same URL requested more than once', help: 'The same GET URL was downloaded more than once (not from cache). This may be wasted work or a sign of retry loops.' },
+};
+const SEV_ORDER = { error: 0, warn: 1, info: 2 };
+
+function pageUrlFor(e) {
+  const p = S.pages.find(p => p.id === e.pageref);
+  if (p && /^https?:\/\//i.test(p.title || '')) return p.title;
+  const doc = S.entries.find(x => x.type === 'doc' && (!e.pageref || x.pageref === e.pageref));
+  return doc ? doc.url : '';
+}
+
+function analyze() {
+  const F = [];
+  const add = (e, code, detail) => { const f = { code, sev: RULES[code].sev, e, detail: detail || '' }; e.findings.push(f); F.push(f); };
+  const byUrl = new Map();
+  for (const e of S.entries) { if (!byUrl.has(e.url)) byUrl.set(e.url, []); byUrl.get(e.url).push(e); }
+
+  // Redirect links
+  for (const e of S.entries) {
+    if (e.status < 300 || e.status >= 400) continue;
+    const res = e.raw.response || {};
+    const loc = hdr(res.headers, 'location') || res.redirectURL;
+    if (!loc) continue;
+    let abs; try { abs = new URL(loc, e.url).href; } catch (_) { continue; }
+    e.redirectTarget = abs;
+    const next = (byUrl.get(abs) || []).find(x => x !== e && x.start >= e.start && !x.redirectFrom);
+    if (next) { e.redirectTo = next; next.redirectFrom = e; }
+  }
+
+  const dupSeen = new Map();
+  for (const e of S.entries) {
+    const req = e.raw.request || {}, res = e.raw.response || {};
+    const t = e.timings;
+    const pageUrl = pageUrlFor(e);
+
+    if (e.method === 'OPTIONS' && hdr(req.headers, 'access-control-request-method') && (e.status === 0 || e.status >= 300)) {
+      add(e, 'preflight', e.status ? 'HTTP ' + e.status : (e.error || 'no response'));
+    } else if (isFailed(e)) {
+      add(e, 'failed', e.error || 'no status recorded');
+    } else if (e.status >= 500) {
+      add(e, 'server_error', e.status + ' ' + e.statusText);
+    } else if (e.status >= 400) {
+      add(e, 'client_error', e.status + ' ' + e.statusText);
+    }
+
+    const origin = hdr(req.headers, 'origin');
+    if (origin && origin !== 'null' && e.u && origin !== e.u.origin && e.status > 0 && e.method !== 'OPTIONS' && !hdr(res.headers, 'access-control-allow-origin')) {
+      add(e, 'cors', 'Origin ' + origin);
+    }
+    // Top-level navigations (e.g. an http→https redirect) are not mixed content.
+    if (e.type !== 'doc' && pageUrl.startsWith('https:') && e.u && e.u.protocol === 'http:') add(e, 'mixed', 'page is ' + pageUrl);
+
+    if (!e.redirectFrom && e.redirectTo) {
+      const chain = [e]; let c = e;
+      while (c.redirectTo && chain.length < 30) { c = c.redirectTo; if (chain.includes(c)) break; chain.push(c); }
+      const hops = chain.filter(x => x.status >= 300 && x.status < 400).length;
+      if (hops >= 2) add(e, 'redirect_chain', hops + ' redirects → ' + chain[chain.length - 1].url);
+    }
+
+    if (e.u && e.u.protocol === 'https:') {
+      for (const sc of hdrAll(res.headers, 'set-cookie')) {
+        for (const line of sc.split('\n')) {
+          if (line.trim() && !/;\s*secure\b/i.test(line)) add(e, 'insecure_cookie', line.split('=')[0].trim() + (/samesite\s*=\s*none/i.test(line) ? ' (SameSite=None)' : ''));
+        }
+      }
+    }
+
+    if (t.wait > 1000) add(e, 'slow_ttfb', fmtMs(t.wait) + ' waiting');
+    if (e.time > 3000) add(e, 'slow_total', fmtMs(e.time));
+    if (t.dns > 200) add(e, 'slow_dns', fmtMs(t.dns));
+    if (t.tcp > 500) add(e, 'slow_connect', fmtMs(t.tcp));
+    if (t.ssl > 500) add(e, 'slow_tls', fmtMs(t.ssl));
+    if (t.blocked > 500) add(e, 'queued', fmtMs(t.blocked));
+    if (e.contentSize > 1048576) add(e, 'large', fmtBytes(e.contentSize));
+
+    const ok200 = e.status === 200 && !e.fromCache;
+    if (ok200 && isTextMime(e.mime) && e.contentSize > 2048 && !hdr(res.headers, 'content-encoding') && (e.transfer === 0 || e.transfer >= e.contentSize * 0.9)) {
+      add(e, 'uncompressed', fmtBytes(e.contentSize) + ' ' + e.mime);
+    }
+    if (ok200 && ['js', 'css', 'img', 'font'].includes(e.type) && Array.isArray(res.headers) && res.headers.length && !hdr(res.headers, 'cache-control') && !hdr(res.headers, 'expires')) {
+      add(e, 'no_cache', TYPE_LABEL[e.type]);
+    }
+    if (e.method === 'GET' && ok200 && e.u) {
+      const n = (dupSeen.get(e.url) || 0) + 1; dupSeen.set(e.url, n);
+      if (n > 1) add(e, 'duplicate', 'request #' + n + ' for this URL');
+    }
+  }
+  F.sort((a, b) => SEV_ORDER[a.sev] - SEV_ORDER[b.sev]);
+  S.findings = F;
+}
+function worstSev(e) {
+  let w = null;
+  for (const f of e.findings) if (w == null || SEV_ORDER[f.sev] < SEV_ORDER[w]) w = f.sev;
+  return w;
+}
+
+/* ---------- view switching ---------- */
+function show(view) {
+  S.view = view;
+  $$('section.view').forEach(s => s.classList.add('hidden'));
+  $(view === 'empty' ? '#empty' : '#view-' + view).classList.remove('hidden');
+  $$('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
+  if (view === 'requests') requestAnimationFrame(renderRows);
+}
+function openRequest(e, tab) {
+  show('requests');
+  if (!S.filtered.includes(e)) { resetFilters(); }
+  select(e, tab);
+}
+
+/* ---------- overview ---------- */
+function bars(rows, max) {
+  return rows.map(([label, n, title]) => h('div', { class: 'barrow', title: title || '' },
+    h('span', { text: label, style: { overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' } }),
+    h('div', { class: 'track' }, h('div', { class: 'fill', style: { width: (max ? n / max * 100 : 0) + '%' } })),
+    h('span', { class: 'n', text: String(n) })));
+}
+function reqTable(list, valueLabel, valueFn) {
+  return h('table', { class: 'simple' },
+    h('colgroup', null, h('col', { style: { width: '54px' } }), h('col'), h('col', { style: { width: '80px' } })),
+    h('thead', null, h('tr', null, h('th', { text: 'Status' }), h('th', { text: 'URL' }), h('th', { class: 'num', text: valueLabel }))),
+    h('tbody', null, list.map(e => h('tr', { class: 'click', onclick: () => openRequest(e) },
+      h('td', { text: e.status || 'failed' }),
+      h('td', { class: 'url', title: e.url, text: e.host + e.path }),
+      h('td', { class: 'num', text: valueFn(e) })))));
+}
+function renderOverview() {
+  const E = S.entries;
+  const failed = E.filter(isFailed).length;
+  const errs = E.filter(e => e.status >= 400).length;
+  const transfer = E.reduce((a, e) => a + e.transfer, 0);
+  const content = E.reduce((a, e) => a + e.contentSize, 0);
+  const span = E.reduce((a, e) => Math.max(a, e.start + e.time), 0);
+  const hosts = new Map();
+  for (const e of E) {
+    const k = e.host || '(none)';
+    const d = hosts.get(k) || { n: 0, bytes: 0, time: 0, errs: 0 };
+    d.n++; d.bytes += e.transfer; d.time += e.time; if (isFailed(e) || e.status >= 400) d.errs++;
+    hosts.set(k, d);
+  }
+  const card = (v, l, cls, title) => h('div', { class: 'card ' + (cls || ''), title: title || '' }, h('div', { class: 'v', text: v }), h('div', { class: 'l', text: l }));
+  const pt = S.pages.map(p => p.pageTimings || {});
+  const onLoad = pt.map(x => x.onLoad).filter(x => typeof x === 'number' && x >= 0);
+  const onDCL = pt.map(x => x.onContentLoad).filter(x => typeof x === 'number' && x >= 0);
+
+  const cards = h('div', { class: 'cards' },
+    card(String(E.length), 'requests'),
+    card(String(failed), 'failed (no response)', failed ? 'err' : ''),
+    card(String(errs), 'HTTP 4xx / 5xx', errs ? (E.some(e => e.status >= 500) ? 'err' : 'warn') : ''),
+    card(fmtBytes(transfer), 'transferred', '', fmtBytes(content) + ' uncompressed content'),
+    card(fmtMs(span), 'first request → last byte'),
+    onLoad.length ? card(fmtMs(onLoad[0]), 'page load event', '', onDCL.length ? 'DOMContentLoaded at ' + fmtMs(onDCL[0]) : '') : null,
+    card(String(hosts.size), 'domains'));
+
+  // Findings summary
+  const groups = groupFindings();
+  const fbox = h('div', { class: 'box' }, h('h3', { text: 'Findings' }),
+    groups.length ? h('table', { class: 'simple' },
+      h('colgroup', null, h('col', { style: { width: '62px' } }), h('col'), h('col', { style: { width: '50px' } })),
+      h('tbody', null, groups.map(g => h('tr', { class: 'click', onclick: () => { show('findings'); const d = document.getElementById('fg-' + g.code); if (d) { d.open = true; d.scrollIntoView({ block: 'start' }); } } },
+        h('td', null, h('span', { class: 'sev ' + g.sev, text: g.sev })),
+        h('td', { text: RULES[g.code].title }),
+        h('td', { class: 'num', text: String(g.items.length) })))))
+      : h('p', { class: 'allgood', text: '✓ No problems detected.' }));
+
+  const slow = [...E].sort((a, b) => b.time - a.time).slice(0, 10);
+  const big = [...E].sort((a, b) => b.transfer - a.transfer).slice(0, 10).filter(e => e.transfer > 0);
+
+  const statusCounts = new Map();
+  for (const e of E) { const k = isFailed(e) ? 'failed' : String(e.status); statusCounts.set(k, (statusCounts.get(k) || 0) + 1); }
+  const sc = [...statusCounts].sort((a, b) => b[1] - a[1]);
+  const typeCounts = new Map();
+  for (const e of E) typeCounts.set(e.type, (typeCounts.get(e.type) || 0) + 1);
+  const tc = [...typeCounts].sort((a, b) => b[1] - a[1]);
+  const hostRows = [...hosts].sort((a, b) => b[1].n - a[1].n);
+
+  $('#view-overview').replaceChildren(h('div', { class: 'ov' },
+    cards, fbox,
+    h('div', { class: 'box' }, h('h3', { text: 'Status codes' }), bars(sc.map(([k, n]) => [k, n]), sc.length ? sc[0][1] : 0),
+      h('h3', { text: 'Resource types', style: { 'margin-top': '14px' } }), bars(tc.map(([k, n]) => [TYPE_LABEL[k], n]), tc.length ? tc[0][1] : 0)),
+    h('div', { class: 'box' }, h('h3', { text: 'Slowest requests' }), reqTable(slow, 'Time', e => fmtMs(e.time))),
+    h('div', { class: 'box' }, h('h3', { text: 'Largest transfers' }), big.length ? reqTable(big, 'Size', e => fmtBytes(e.transfer)) : h('p', { class: 'muted', text: 'No size information in this HAR.' })),
+    h('div', { class: 'box wide' }, h('h3', { text: 'Domains' }),
+      h('table', { class: 'simple' },
+        h('colgroup', null, h('col'), h('col', { style: { width: '90px' } }), h('col', { style: { width: '90px' } }), h('col', { style: { width: '90px' } }), h('col', { style: { width: '90px' } })),
+        h('thead', null, h('tr', null, h('th', { text: 'Domain' }), h('th', { class: 'num', text: 'Requests' }), h('th', { class: 'num', text: 'Errors' }), h('th', { class: 'num', text: 'Transferred' }), h('th', { class: 'num', text: 'Avg time' }))),
+        h('tbody', null, hostRows.map(([k, d]) => h('tr', { class: 'click', title: 'Show requests to ' + k, onclick: () => { resetFilters(); $('#f-domain').value = k === '(none)' ? '' : k; applyFilters(); show('requests'); } },
+          h('td', { class: 'url', text: k }), h('td', { class: 'num', text: String(d.n) }),
+          h('td', { class: 'num', text: String(d.errs), style: d.errs ? { color: 'var(--err)' } : {} }),
+          h('td', { class: 'num', text: fmtBytes(d.bytes) }), h('td', { class: 'num', text: fmtMs(d.time / d.n) }))))))
+  ));
+}
+
+/* ---------- findings view ---------- */
+function groupFindings() {
+  const m = new Map();
+  for (const f of S.findings) { if (!m.has(f.code)) m.set(f.code, { code: f.code, sev: f.sev, items: [] }); m.get(f.code).items.push(f); }
+  return [...m.values()].sort((a, b) => SEV_ORDER[a.sev] - SEV_ORDER[b.sev] || b.items.length - a.items.length);
+}
+function renderFindings() {
+  const groups = groupFindings();
+  const LIMIT = 200;
+  $('#view-findings').replaceChildren(h('div', { class: 'fv' },
+    groups.length ? null : h('p', { class: 'allgood', text: '✓ No problems detected in this HAR.' }),
+    groups.map(g => h('details', { id: 'fg-' + g.code, open: g.sev !== 'info' ? true : null },
+      h('summary', null, h('span', { class: 'sev ' + g.sev, text: g.sev }), h('span', { class: 't', text: RULES[g.code].title }), h('span', { class: 'badge', text: String(g.items.length) })),
+      h('p', { class: 'help', text: RULES[g.code].help }),
+      h('table', { class: 'simple' },
+        h('colgroup', null, h('col', { style: { width: '50px' } }), h('col', { style: { width: '60px' } }), h('col', { style: { width: '70px' } }), h('col'), h('col', { style: { width: '32%' } })),
+        h('tbody', null, g.items.slice(0, LIMIT).map(f => h('tr', { class: 'click', onclick: () => openRequest(f.e, 'issues') },
+          h('td', { class: 'muted', text: '#' + f.e.i }),
+          h('td', { text: f.e.status || 'failed' }),
+          h('td', { text: f.e.method }),
+          h('td', { class: 'url', title: f.e.url, text: f.e.url }),
+          h('td', { text: f.detail, title: f.detail }))))),
+      g.items.length > LIMIT ? h('div', { class: 'more muted', text: '… and ' + (g.items.length - LIMIT) + ' more. Use the Requests tab with “With findings” to see all.' }) : null))));
+}
+
+/* ---------- requests: filters ---------- */
+function setupFilters() {
+  const hosts = [...new Set(S.entries.map(e => e.host).filter(Boolean))].sort();
+  $('#f-domain').replaceChildren(h('option', { value: '', text: 'All domains' }), ...hosts.map(x => h('option', { value: x, text: x })));
+  const pg = $('#f-page');
+  pg.replaceChildren(h('option', { value: '', text: 'All pages' }), ...S.pages.map(p => h('option', { value: p.id, text: (p.title || p.id || '').slice(0, 80) })));
+  pg.classList.toggle('hidden', S.pages.length < 2);
+  const present = new Set(S.entries.map(e => e.type));
+  const chips = $('#type-chips');
+  chips.replaceChildren(h('button', { class: 'chip on', 'data-type': '', text: 'All' }),
+    ...Object.keys(TYPE_LABEL).filter(k => present.has(k)).map(k => h('button', { class: 'chip', 'data-type': k, text: TYPE_LABEL[k] })));
+  resetFilters();
+}
+function resetFilters() {
+  $('#q').value = ''; $('#f-status').value = ''; $('#f-domain').value = ''; $('#f-page').value = '';
+  $('#f-issues').checked = false; $('#f-deep').checked = false; S.types.clear(); syncChips(); applyFilters();
+}
+function syncChips() {
+  $$('#type-chips .chip').forEach(c => c.classList.toggle('on', c.dataset.type ? S.types.has(c.dataset.type) : S.types.size === 0));
+}
+function parseSize(v) { const m = /^([\d.]+)\s*(b|k|kb|m|mb|g|gb)?$/i.exec(v); if (!m) return NaN; const mult = { b: 1, k: 1024, kb: 1024, m: 1048576, mb: 1048576, g: 1073741824, gb: 1073741824 }[(m[2] || 'b').toLowerCase()]; return parseFloat(m[1]) * mult; }
+function parseDur(v) { const m = /^([\d.]+)\s*(ms|s)?$/i.exec(v); if (!m) return NaN; return parseFloat(m[1]) * ((m[2] || 'ms').toLowerCase() === 's' ? 1000 : 1); }
+function parseQuery(s) {
+  return s.trim().split(/\s+/).filter(Boolean).map(tok => {
+    let neg = false;
+    if (tok.length > 1 && tok[0] === '-') { neg = true; tok = tok.slice(1); }
+    const m = /^(status|method|domain|host|type|mime|larger|slower):(.+)$/i.exec(tok);
+    return m ? { neg, key: m[1].toLowerCase(), val: m[2].toLowerCase() } : { neg, key: null, val: tok.toLowerCase() };
+  });
+}
+function haystack(e) {
+  if (e._hay == null) {
+    const r = e.raw.request || {}, s = e.raw.response || {};
+    const parts = [e.url];
+    for (const x of (r.headers || [])) parts.push(x.name + ': ' + x.value);
+    for (const x of (s.headers || [])) parts.push(x.name + ': ' + x.value);
+    if (r.postData && r.postData.text) parts.push(String(r.postData.text).slice(0, 200000));
+    const body = bodyText(s.content || {}); if (body) parts.push(body.slice(0, 500000));
+    e._hay = parts.join('\n').toLowerCase();
+  }
+  return e._hay;
+}
+function tokMatch(e, t, deep) {
+  const v = t.val;
+  switch (t.key) {
+    case 'status':
+      if (v === 'failed' || v === '0') return isFailed(e);
+      if (/^[1-5]xx$/.test(v)) return Math.floor(e.status / 100) === +v[0];
+      return String(e.status) === v;
+    case 'method': return e.method.toLowerCase() === v;
+    case 'domain': case 'host': return e.host.toLowerCase().includes(v);
+    case 'type': return e.type === v || TYPE_LABEL[e.type].toLowerCase().startsWith(v);
+    case 'mime': return e.mime.toLowerCase().includes(v);
+    case 'larger': return e.transfer > parseSize(v);
+    case 'slower': return e.time > parseDur(v);
+    default: return (deep ? haystack(e) : e.url.toLowerCase()).includes(v);
+  }
+}
+function applyFilters() {
+  const q = parseQuery($('#q').value);
+  const st = $('#f-status').value, dom = $('#f-domain').value, pg = $('#f-page').value;
+  const issues = $('#f-issues').checked, deep = $('#f-deep').checked;
+  S.filtered = S.entries.filter(e => {
+    if (pg && e.pageref !== pg) return false;
+    if (dom && e.host !== dom) return false;
+    if (S.types.size && !S.types.has(e.type)) return false;
+    if (issues && !e.findings.length) return false;
+    if (st === 'errors' && !(isFailed(e) || e.status >= 400)) return false;
+    if (st === 'failed' && !isFailed(e)) return false;
+    if (/^\d$/.test(st) && Math.floor(e.status / 100) !== +st) return false;
+    for (const t of q) if (tokMatch(e, t, deep) === t.neg) return false;
+    return true;
+  });
+  sortFiltered();
+  S.span = S.filtered.reduce((a, e) => Math.max(a, e.start + e.time), 0);
+  S.minStart = S.filtered.reduce((a, e) => Math.min(a, e.start), Infinity);
+  if (S.minStart === Infinity) S.minStart = 0;
+  $('#count').textContent = S.filtered.length === S.entries.length ? S.entries.length + ' requests' : S.filtered.length + ' of ' + S.entries.length + ' requests';
+  renderRows();
+}
+function sortFiltered() {
+  const { key, dir } = S.sort;
+  S.filtered.sort((a, b) => {
+    let x = a[key], y = b[key];
+    if (key === 'start') { x = a.start; y = b.start; if (x === y) return (a.i - b.i) * dir; }
+    if (typeof x === 'string') return x.localeCompare(y) * dir || (a.i - b.i);
+    return ((x > y) - (x < y)) * dir || (a.i - b.i);
+  });
+  $$('#thead > div').forEach(d => {
+    const on = d.dataset.key === key;
+    d.classList.toggle('sorted', on);
+    d.textContent = d.textContent.replace(/ [▲▼]$/, '') + (on ? (dir > 0 ? ' ▲' : ' ▼') : '');
+  });
+}
+
+/* ---------- requests: virtualised table ---------- */
+const ROW_H = 26;
+function renderRows() {
+  const vp = $('#rows'), inner = $('#rows-inner');
+  if (!S.filtered.length) {
+    inner.style.height = 'auto';
+    inner.replaceChildren(h('div', { class: 'nomatch', text: S.entries.length ? 'No requests match the current filters.' : '' }));
+    return;
+  }
+  inner.style.height = S.filtered.length * ROW_H + 'px';
+  const top = vp.scrollTop, height = vp.clientHeight || 600;
+  const first = Math.max(0, Math.floor(top / ROW_H) - 8);
+  const last = Math.min(S.filtered.length, Math.ceil((top + height) / ROW_H) + 8);
+  const span = Math.max(1, S.span - S.minStart);
+  const frag = document.createDocumentFragment();
+  for (let k = first; k < last; k++) {
+    const e = S.filtered[k];
+    const sc = statusClass(e);
+    const ws = worstSev(e);
+    const left = (e.start - S.minStart) / span * 100;
+    const width = Math.max(e.time / span * 100, 0.2);
+    const t = e.timings, tot = t.blocked + t.dns + t.connect + t.send + t.wait + t.receive;
+    const segs = tot > 0 ? [['blocked', t.blocked], ['dns', t.dns], ['connect', t.tcp], ['ssl', t.ssl], ['send', t.send], ['wait', t.wait], ['receive', t.receive]]
+      .filter(s => s[1] > 0).map(s => h('span', { class: 'ph-' + s[0], style: { width: (s[1] / tot * 100) + '%' } })) : [];
+    frag.append(h('div', {
+      class: 'grid-row row' + (e === S.selected ? ' sel' : '') + (sc === 'err' ? ' st-err' : sc === 'warn' ? ' st-warn' : ''),
+      style: { top: k * ROW_H + 'px' }, 'data-k': k, title: e.url
+    },
+      h('div', { class: 'c-idx muted' }, ws ? h('span', { class: 'dot ' + ws }) : null, String(e.i)),
+      h('div', { class: 'c-status', text: isFailed(e) ? 'failed' : String(e.status) }),
+      h('div', { class: 'c-method', text: e.method }),
+      h('div', { class: 'c-domain', text: e.host }),
+      h('div', { class: 'c-path', text: S.selected ? (e.u ? (e.u.pathname.split('/').filter(Boolean).pop() || e.host) + e.u.search : e.url) : e.path }),
+      h('div', { class: 'c-type', text: TYPE_LABEL[e.type] }),
+      h('div', { class: 'c-size', text: e.fromCache && !e.transfer ? '(cache)' : fmtBytes(e.transfer) }),
+      h('div', { class: 'c-time', text: fmtMs(e.time) }),
+      h('div', { class: 'c-wf' }, h('div', { class: 'wf' }, h('div', { class: 'bar', style: { left: Math.min(left, 99.8) + '%', width: width + '%' } }, segs)))));
+  }
+  inner.replaceChildren(frag);
+}
+function select(e, tab) {
+  S.selected = e;
+  if (tab) S.dtab = tab;
+  $('#split').classList.toggle('has-detail', !!e);
+  $('#detail').classList.toggle('hidden', !e);
+  if (e) {
+    const k = S.filtered.indexOf(e), vp = $('#rows');
+    if (k >= 0) {
+      const y = k * ROW_H;
+      if (y < vp.scrollTop || y + ROW_H > vp.scrollTop + vp.clientHeight) vp.scrollTop = Math.max(0, y - vp.clientHeight / 2);
+    }
+    renderDetail();
+  }
+  renderRows();
+}
+
+/* ---------- detail pane ---------- */
+function bodyText(content) {
+  if (!content || content.text == null) return null;
+  if (content.encoding === 'base64') {
+    try {
+      const bin = atob(content.text);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return new TextDecoder('utf-8').decode(bytes);
+    } catch (_) { return null; }
+  }
+  return String(content.text);
+}
+const MAX_SHOW = 1_000_000;
+function prettyBody(text, mime) {
+  if (text == null) return null;
+  let out = text, note = '';
+  if (/json/i.test(mime) || /^\s*[\[{]/.test(text)) {
+    try { out = JSON.stringify(JSON.parse(text), null, 2); note = 'JSON (formatted)'; } catch (_) { /* not JSON */ }
+  }
+  if (out.length > MAX_SHOW) { note = (note ? note + ' · ' : '') + 'showing first ' + fmtBytes(MAX_SHOW) + ' of ' + fmtBytes(out.length); out = out.slice(0, MAX_SHOW); }
+  return { out, note };
+}
+function kvList(rows) {
+  if (!rows || !rows.length) return h('p', { class: 'note', text: 'None.' });
+  return h('div', { class: 'kv' }, rows.map(([k, v]) => [h('div', { class: 'k', text: k }), h('div', { class: 'v', text: v == null ? '' : String(v) })]));
+}
+function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'"; }
+function toCurl(e) {
+  const r = e.raw.request || {};
+  const parts = ['curl ' + shq(e.url)];
+  if (e.method !== 'GET' && !(e.method === 'POST' && r.postData)) parts.push('-X ' + e.method);
+  for (const x of (r.headers || [])) {
+    const n = String(x.name);
+    if (n.startsWith(':') || /^(content-length|host|connection|accept-encoding)$/i.test(n)) continue;
+    parts.push('-H ' + shq(n + ': ' + x.value));
+  }
+  if (r.postData && r.postData.text != null) parts.push('--data-raw ' + shq(r.postData.text));
+  else if (r.postData && Array.isArray(r.postData.params)) for (const p of r.postData.params) parts.push('--data-urlencode ' + shq(p.name + '=' + (p.value || '')));
+  parts.push('--compressed');
+  return parts.join(' \\\n  ');
+}
+function timingRows(e) {
+  const t = e.timings;
+  const phases = [
+    ['blocked', 'Queued / stalled', t.blocked], ['dns', 'DNS lookup', t.dns], ['connect', 'TCP connect', t.tcp], ['ssl', 'TLS handshake', t.ssl],
+    ['send', 'Request sent', t.send], ['wait', 'Waiting (TTFB)', t.wait], ['receive', 'Content download', t.receive]];
+  const total = Math.max(e.time, phases.reduce((a, p) => a + p[2], 0), 0.0001);
+  let offset = 0;
+  return phases.map(([k, label, v]) => {
+    const row = h('div', { class: 'trow' }, h('span', { text: label }),
+      h('div', { class: 'track' }, v > 0 ? h('span', { class: 'ph-' + k, style: { left: (offset / total * 100) + '%', width: (v / total * 100) + '%' } }) : null),
+      h('span', { class: 'n', text: v > 0 ? fmtMs(v) : '—' }));
+    offset += v;
+    return row;
+  });
+}
+function renderDetail() {
+  const e = S.selected; if (!e) return;
+  const req = e.raw.request || {}, res = e.raw.response || {};
+  const sc = statusClass(e);
+  const tabs = [['headers', 'Headers'], ['payload', 'Payload'], ['response', 'Response'], ['timing', 'Timing'], ['cookies', 'Cookies'], ['issues', 'Findings' + (e.findings.length ? ' (' + e.findings.length + ')' : '')]];
+  if (!tabs.some(t => t[0] === S.dtab)) S.dtab = 'headers';
+
+  const body = h('div', { class: 'dbody' });
+  const fill = () => {
+    body.replaceChildren(h('div', null, detailTab(e, S.dtab)));
+    $$('.dtabs button', pane).forEach(b => b.classList.toggle('active', b.dataset.tab === S.dtab));
+  };
+  const pane = $('#detail');
+  pane.replaceChildren(
+    h('div', { class: 'dhead' },
+      h('div', { class: 'top' },
+        h('span', { class: 'status-pill ' + sc, text: isFailed(e) ? 'failed' : e.status + ' ' + e.statusText }),
+        h('b', { text: e.method }),
+        h('span', { class: 'muted', text: '#' + e.i + ' · ' + fmtMs(e.time) + ' · ' + fmtBytes(e.transfer) }),
+        h('span', { class: 'spacer' }),
+        h('button', { title: 'Copy URL', onclick: () => copyText(e.url), text: 'Copy URL' }),
+        h('button', { title: 'Copy this request as a curl command', onclick: () => copyText(toCurl(e)), text: 'Copy as cURL' }),
+        h('button', { title: 'Close (Esc)', onclick: () => select(null), text: '✕' })),
+      h('div', { class: 'url', text: e.url })),
+    h('div', { class: 'dtabs' }, tabs.map(([k, l]) => h('button', { 'data-tab': k, text: l, onclick: () => { S.dtab = k; fill(); } }))),
+    body);
+  fill();
+}
+function detailTab(e, tab) {
+  const req = e.raw.request || {}, res = e.raw.response || {}, content = res.content || {};
+  if (tab === 'headers') {
+    const started = e.raw.startedDateTime || '';
+    const chain = [];
+    let c = e; while (c.redirectFrom && chain.length < 30) { c = c.redirectFrom; if (chain.includes(c)) break; }
+    for (let x = c, n = 0; x && n < 30; x = x.redirectTo, n++) chain.push(x);
+    return [
+      h('h4', { text: 'General' }),
+      kvList([
+        ['Request URL', e.url], ['Method', e.method], ['Status', isFailed(e) ? '(failed)' : e.status + ' ' + e.statusText],
+        e.error ? ['Error', e.error] : null,
+        ['HTTP version', e.httpVersion || '—'], ['Remote address', e.serverIP || '—'], e.connection ? ['Connection ID', e.connection] : null,
+        ['Type', TYPE_LABEL[e.type] + (e.mime ? ' (' + e.mime + ')' : '')],
+        ['Started', started + (started ? '  (+' + fmtMs(e.start) + ')' : '')], ['Duration', fmtMs(e.time)],
+        ['Transferred', fmtBytes(e.transfer)], ['Content size', fmtBytes(e.contentSize)],
+        e.fromCache ? ['Served from', e.fromCache] : null,
+        e.redirectTarget ? ['Redirects to', e.redirectTarget] : null,
+        e.raw._initiator && e.raw._initiator.url ? ['Initiator', e.raw._initiator.url + (e.raw._initiator.lineNumber != null ? ':' + e.raw._initiator.lineNumber : '')] : (e.raw._initiator && e.raw._initiator.type ? ['Initiator', e.raw._initiator.type] : null),
+      ].filter(Boolean)),
+      chain.length > 1 ? [h('h4', { text: 'Redirect chain' }), h('div', { class: 'chain' }, chain.map(x => h('div', null,
+        x === e ? h('b', { text: '▶ ' + (x.status || 'failed') + '  ' + x.url }) : h('a', { href: '#', text: (x.status || 'failed') + '  ' + x.url, onclick: ev => { ev.preventDefault(); select(x); } }))))] : null,
+      h('h4', { text: 'Response headers (' + (res.headers || []).length + ')' }),
+      kvList((res.headers || []).map(x => [x.name, x.value])),
+      h('h4', { text: 'Request headers (' + (req.headers || []).length + ')' }),
+      kvList((req.headers || []).map(x => [x.name, x.value])),
+    ].flat();
+  }
+  if (tab === 'payload') {
+    const out = [h('h4', { text: 'Query string parameters' }), kvList((req.queryString || []).map(x => [x.name, x.value]))];
+    const pd = req.postData;
+    out.push(h('h4', { text: 'Request body' }));
+    if (!pd) out.push(h('p', { class: 'note', text: 'No request body.' }));
+    else {
+      if (pd.mimeType) out.push(h('p', { class: 'note', text: pd.mimeType }));
+      if (Array.isArray(pd.params) && pd.params.length) out.push(kvList(pd.params.map(p => [p.name, p.fileName ? '(file: ' + p.fileName + ')' : p.value])));
+      if (pd.text != null) {
+        let text = String(pd.text);
+        if (/x-www-form-urlencoded/i.test(pd.mimeType || '') && !(pd.params && pd.params.length)) {
+          try { out.push(kvList([...new URLSearchParams(text)])); } catch (_) { /* show raw */ }
+        }
+        const p = prettyBody(text, pd.mimeType || '');
+        if (p.note) out.push(h('p', { class: 'note', text: p.note }));
+        out.push(h('pre', { class: 'body', text: p.out }));
+      }
+    }
+    return out;
+  }
+  if (tab === 'response') {
+    const mime = content.mimeType || e.mime;
+    const out = [h('p', { class: 'note', text: [mime, content.encoding ? 'encoding: ' + content.encoding : '', content.compression ? 'saved by compression: ' + fmtBytes(content.compression) : ''].filter(Boolean).join(' · ') })];
+    if (content.text == null || content.text === '') {
+      out.push(h('p', { class: 'note', text: e.contentSize ? 'The response body was not saved in this HAR. (Some browsers omit bodies, or the HAR was exported without content.)' : 'Empty response body.' }));
+      if (content.comment) out.push(h('p', { class: 'note', text: content.comment }));
+      return out;
+    }
+    if (/^image\/(png|jpe?g|gif|webp|avif|bmp|x-icon|vnd\.microsoft\.icon|svg\+xml)$/i.test(mime)) {
+      const src = content.encoding === 'base64' ? 'data:' + mime + ';base64,' + content.text : 'data:' + mime + ';charset=utf-8,' + encodeURIComponent(content.text);
+      const dims = h('p', { class: 'note' });
+      out.push(h('img', { class: 'imgprev', src, alt: 'response image', onload: ev => { dims.textContent = ev.target.naturalWidth + ' × ' + ev.target.naturalHeight + ' px'; } }), dims);
+      return out;
+    }
+    if (content.encoding === 'base64' && !isTextMime(mime)) {
+      out.push(h('p', { class: 'note', text: 'Binary content (' + fmtBytes(Math.floor(content.text.length * 3 / 4)) + '), not shown.' }));
+      return out;
+    }
+    const p = prettyBody(bodyText(content), mime);
+    if (!p) { out.push(h('p', { class: 'note', text: 'Could not decode the body.' })); return out; }
+    if (p.note) out.push(h('p', { class: 'note', text: p.note }));
+    out.push(h('pre', { class: 'body', text: p.out }));
+    return out;
+  }
+  if (tab === 'timing') {
+    const t = e.timings;
+    const ttfbStart = t.blocked + t.dns + t.connect + t.send;
+    return [
+      h('h4', { text: 'Where the time went' }),
+      timingRows(e),
+      h('div', { class: 'trow', style: { 'margin-top': '8px', 'font-weight': '600' } }, h('span', { text: 'Total' }), h('span'), h('span', { class: 'n', text: fmtMs(e.time) })),
+      h('div', { class: 'legend' }, [['blocked', 'Queued'], ['dns', 'DNS'], ['connect', 'TCP'], ['ssl', 'TLS'], ['send', 'Send'], ['wait', 'Waiting'], ['receive', 'Download']].map(([k, l]) => h('span', null, h('i', { class: 'ph-' + k }), l))),
+      h('p', { class: 'note', text: 'Started ' + fmtMs(e.start) + ' after the first request. First byte arrived after ' + fmtMs(ttfbStart + t.wait) + '. ' +
+        (t.dns === 0 && t.connect === 0 ? 'No DNS or connect time: an existing connection was reused (or the browser did not record it). ' : '') +
+        (t.wait > Math.max(t.receive, t.blocked, t.dns, t.connect) && t.wait > 200 ? 'Most of the time was spent waiting for the server.' : '') }),
+    ].flat();
+  }
+  if (tab === 'cookies') {
+    const ck = list => list && list.length ? h('table', { class: 'simple' },
+      h('thead', null, h('tr', null, ['Name', 'Value', 'Domain', 'Path', 'Expires', 'Flags'].map(x => h('th', { text: x })))),
+      h('tbody', null, list.map(c => h('tr', null,
+        h('td', { class: 'mono', text: c.name || '' }), h('td', { class: 'mono', text: c.value || '', title: c.value || '' }),
+        h('td', { text: c.domain || '' }), h('td', { text: c.path || '' }), h('td', { text: c.expires || '' }),
+        h('td', { text: [c.httpOnly ? 'HttpOnly' : '', c.secure ? 'Secure' : '', c.sameSite ? 'SameSite=' + c.sameSite : ''].filter(Boolean).join(' ') })))))
+      : h('p', { class: 'note', text: 'None.' });
+    return [h('h4', { text: 'Sent with the request' }), ck(req.cookies), h('h4', { text: 'Set by the response' }), ck(res.cookies)];
+  }
+  if (tab === 'issues') {
+    if (!e.findings.length) return [h('p', { class: 'allgood', text: '✓ No findings for this request.' })];
+    return e.findings.map(f => h('div', { class: 'finding' },
+      h('div', null, h('span', { class: 'sev ' + f.sev, text: f.sev }), ' ', h('span', { class: 't', text: RULES[f.code].title })),
+      f.detail ? h('p', { class: 'mono', text: f.detail }) : null,
+      h('p', { text: RULES[f.code].help })));
+  }
+  return [];
+}
+
+/* ---------- export ---------- */
+const SENSITIVE_HEADER = /^(authorization|proxy-authorization|cookie|set-cookie|x-api-key|api-key|apikey|x-auth-token|x-access-token|x-refresh-token|x-id-token|x-csrf-token|x-xsrf-token|csrf-token|x-amz-security-token|x-goog-api-key|ocp-apim-subscription-key|x-functions-key|private-token|x-session-id|x-ms-token-aad-access-token)$/i;
+const SENSITIVE_NAME = /(token|secret|passw|pwd|auth|session|sessid|sig|signature|credential|apikey|api_key|api-key|ticket|assertion|saml|jwt|bearer)/i;
+const SENSITIVE_EXACT = /^(code|key|state|nonce|otp|pin|sid|ssn)$/i;
+const RED = '[REDACTED]';
+const isSensitiveName = n => SENSITIVE_NAME.test(n) || SENSITIVE_EXACT.test(n);
+function redactUrl(url) {
+  try {
+    const u = new URL(url); let changed = false;
+    for (const k of [...new Set(u.searchParams.keys())]) if (isSensitiveName(k)) { u.searchParams.set(k, RED); changed = true; }
+    if (u.username || u.password) { u.username = ''; u.password = ''; changed = true; }
+    if (u.hash && /(access_token|id_token|token)=/i.test(u.hash)) { u.hash = '#' + RED; changed = true; }
+    return changed ? u.href : url;
+  } catch (_) { return url; }
+}
+function redactJson(v) {
+  if (Array.isArray(v)) return v.map(redactJson);
+  if (v && typeof v === 'object') { const o = {}; for (const [k, x] of Object.entries(v)) o[k] = isSensitiveName(k) && (typeof x !== 'object' || x === null) ? RED : redactJson(x); return o; }
+  return v;
+}
+function redactBodyText(text, mime) {
+  if (text == null) return text;
+  try { if (/json/i.test(mime || '') || /^\s*[\[{]/.test(text)) return JSON.stringify(redactJson(JSON.parse(text))); } catch (_) { /* not JSON */ }
+  if (/x-www-form-urlencoded/i.test(mime || '')) {
+    try { const p = new URLSearchParams(text); for (const k of [...new Set(p.keys())]) if (isSensitiveName(k)) p.set(k, RED); return p.toString(); } catch (_) { /* leave */ }
+  }
+  return text;
+}
+function buildRedacted(opts) {
+  const har = JSON.parse(JSON.stringify(S.har));
+  const fixHeaders = list => (list || []).map(x => {
+    const n = String(x.name);
+    if (SENSITIVE_HEADER.test(n) || (opts.params && isSensitiveName(n) && !/^(accept|content|cache|access-control)/i.test(n))) return { ...x, value: RED };
+    if (opts.params && /^(referer|location|origin|content-location)$/i.test(n)) return { ...x, value: redactUrl(String(x.value)) };
+    return x;
+  });
+  const fixCookies = list => (list || []).map(c => ({ ...c, value: RED }));
+  for (const p of (har.log.pages || [])) if (opts.params && p.title) p.title = redactUrl(p.title);
+  for (const e of har.log.entries || []) {
+    const req = e.request || {}, res = e.response || {};
+    req.headers = fixHeaders(req.headers); res.headers = fixHeaders(res.headers);
+    req.cookies = fixCookies(req.cookies); res.cookies = fixCookies(res.cookies);
+    if (opts.params) {
+      if (req.url) req.url = redactUrl(req.url);
+      if (res.redirectURL) res.redirectURL = redactUrl(res.redirectURL);
+      req.queryString = (req.queryString || []).map(q => isSensitiveName(q.name) ? { ...q, value: RED } : q);
+    }
+    if (req.postData) {
+      if (opts.reqBody) { req.postData = { mimeType: req.postData.mimeType || '', text: '', comment: 'removed by HAR Analyzer' }; }
+      else if (opts.params) {
+        if (req.postData.text != null) req.postData.text = redactBodyText(String(req.postData.text), req.postData.mimeType);
+        if (Array.isArray(req.postData.params)) req.postData.params = req.postData.params.map(p => isSensitiveName(p.name) ? { ...p, value: RED } : p);
+      }
+    }
+    if (res.content) {
+      if (opts.resBody) { delete res.content.text; delete res.content.encoding; res.content.comment = 'removed by HAR Analyzer'; }
+      else if (opts.params && res.content.text != null && res.content.encoding !== 'base64') res.content.text = redactBodyText(String(res.content.text), res.content.mimeType);
+    }
+    if (opts.resBody && e._webSocketMessages) delete e._webSocketMessages;
+  }
+  har.log.comment = ((har.log.comment ? har.log.comment + ' ' : '') + 'Redacted with HAR Analyzer on ' + new Date().toISOString() + '.').trim();
+  return har;
+}
+function csvCell(v) { v = v == null ? '' : String(v); return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
+function exportCsv() {
+  const cols = ['#', 'started_ms', 'method', 'status', 'status_text', 'url', 'domain', 'type', 'mime', 'transfer_bytes', 'content_bytes', 'time_ms', 'blocked_ms', 'dns_ms', 'connect_ms', 'tls_ms', 'send_ms', 'wait_ms', 'receive_ms', 'http_version', 'server_ip', 'error', 'findings'];
+  const lines = [cols.join(',')];
+  for (const e of S.filtered) {
+    const t = e.timings;
+    lines.push([e.i, Math.round(e.start), e.method, e.status, e.statusText, e.url, e.host, TYPE_LABEL[e.type], e.mime, e.transfer, e.contentSize, e.time.toFixed(1),
+      t.blocked.toFixed(1), t.dns.toFixed(1), t.tcp.toFixed(1), t.ssl.toFixed(1), t.send.toFixed(1), t.wait.toFixed(1), t.receive.toFixed(1),
+      e.httpVersion, e.serverIP, e.error, e.findings.map(f => RULES[f.code].title).join('; ')].map(csvCell).join(','));
+  }
+  download(S.fileName.replace(/\.(har|json)$/i, '') + '-requests.csv', lines.join('\r\n'), 'text/csv');
+}
+
+/* ---------- events ---------- */
+$('#btn-open').onclick = $('#btn-open2').onclick = () => $('#file').click();
+$('#file').onchange = ev => { readFile(ev.target.files[0]); ev.target.value = ''; };
+$('#tabs').onclick = ev => { const b = ev.target.closest('button'); if (b && !b.disabled) show(b.dataset.view); };
+$('#btn-theme').onclick = () => {
+  const root = document.documentElement;
+  const dark = root.dataset.theme ? root.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+  root.dataset.theme = dark ? 'light' : 'dark';
+};
+let dragDepth = 0;
+window.addEventListener('dragenter', ev => { ev.preventDefault(); dragDepth++; document.body.classList.add('dragging'); });
+window.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragging'); } });
+window.addEventListener('dragover', ev => ev.preventDefault());
+window.addEventListener('drop', ev => {
+  ev.preventDefault(); dragDepth = 0; document.body.classList.remove('dragging');
+  const f = ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0];
+  if (f) readFile(f);
+});
+
+let qTimer;
+$('#q').addEventListener('input', () => { clearTimeout(qTimer); qTimer = setTimeout(applyFilters, 120); });
+['#f-status', '#f-domain', '#f-page', '#f-issues', '#f-deep'].forEach(s => $(s).addEventListener('change', applyFilters));
+$('#type-chips').onclick = ev => {
+  const c = ev.target.closest('.chip'); if (!c) return;
+  const t = c.dataset.type;
+  if (!t) S.types.clear(); else if (S.types.has(t)) S.types.delete(t); else S.types.add(t);
+  syncChips(); applyFilters();
+};
+$('#thead').onclick = ev => {
+  const d = ev.target.closest('[data-key]'); if (!d) return;
+  const key = d.dataset.key;
+  S.sort = { key, dir: S.sort.key === key ? -S.sort.dir : (['time', 'transfer', 'status'].includes(key) ? -1 : 1) };
+  sortFiltered(); renderRows();
+};
+let raf = 0;
+$('#rows').addEventListener('scroll', () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; renderRows(); }); });
+window.addEventListener('resize', () => { if (S.view === 'requests') renderRows(); });
+$('#rows').onclick = ev => { const r = ev.target.closest('.row'); if (r) select(S.filtered[+r.dataset.k]); };
+
+document.addEventListener('keydown', ev => {
+  const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement && document.activeElement.tagName);
+  if ($('#dlg-export').open) return;
+  if (ev.key === '/' && !typing && S.entries.length) { ev.preventDefault(); show('requests'); $('#q').focus(); return; }
+  if (S.view !== 'requests') return;
+  if (ev.key === 'Escape') { if (typing) document.activeElement.blur(); else select(null); return; }
+  if (typing) return;
+  if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp' || ev.key === 'j' || ev.key === 'k') {
+    if (!S.filtered.length) return;
+    ev.preventDefault();
+    const k = S.filtered.indexOf(S.selected);
+    const down = ev.key === 'ArrowDown' || ev.key === 'j';
+    const n = k < 0 ? 0 : Math.max(0, Math.min(S.filtered.length - 1, k + (down ? 1 : -1)));
+    select(S.filtered[n]);
+  }
+});
+
+$('#btn-export').onclick = () => $('#dlg-export').showModal();
+$('#x-cancel').onclick = () => $('#dlg-export').close();
+$('#x-csv').onclick = () => { exportCsv(); $('#dlg-export').close(); };
+$('#x-har').onclick = () => {
+  const har = buildRedacted({ params: $('#x-params').checked, reqBody: $('#x-reqbody').checked, resBody: $('#x-resbody').checked });
+  download(S.fileName.replace(/\.(har|json)$/i, '') + '-redacted.har', JSON.stringify(har, null, 2), 'application/json');
+  $('#dlg-export').close(); toast('Redacted HAR saved');
+};
+</script>
+</body>
+</html>

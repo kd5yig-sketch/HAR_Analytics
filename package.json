@@ -1,0 +1,14 @@
+{
+  "name": "har-analyzer",
+  "version": "1.0.0",
+  "description": "Offline, single-file HAR analyzer for troubleshooting HTTP/HTTPS sessions",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node test/smoke.mjs",
+    "sample": "node test/make-sample.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}
