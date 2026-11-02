@@ -12,8 +12,9 @@ HAR files. It is a single HTML file: no install, no server, no account, no cloud
 2. Open it in Chrome, Edge, Firefox or Safari by double-clicking it.
 3. Drag a `.har` file onto the page, or click **Open HAR…**.
 
-No HAR file handy? Open [`sample/sample.har`](sample/sample.har). It is a synthetic capture
-that triggers every kind of finding. See [Capturing a HAR](#capturing-a-har) to record your own.
+No HAR file handy? Open [`sample/sample.har`](sample/sample.har) (general problems) or
+[`sample/auth-failures.har`](sample/auth-failures.har) (19 authentication scenarios). Both are
+synthetic captures. See [Capturing a HAR](#capturing-a-har) to record your own.
 
 ## Privacy
 
@@ -68,6 +69,64 @@ from a terminal.
 | Info | Slow DNS (> 200 ms), TCP connect (> 500 ms), TLS (> 500 ms), or queueing (> 500 ms) |
 | Info | Large response (> 1 MB), uncompressed text response (> 2 KB), static asset without caching headers, same URL downloaded more than once |
 
+## Authentication analysis
+
+The **Authentication** tab works out how each request authenticated, finds every failed
+authentication, authorization or sign-in, and explains **why it failed** from evidence in the HAR.
+
+**Methods it recognizes.** It decodes the credentials and challenges rather than just naming them:
+
+| Method | What it reads |
+|---|---|
+| HTTP Basic | User name (never the password); whether it went over plain HTTP |
+| Bearer tokens / JWT | Header and claims: issuer, audience, scopes, roles, expiry; whether an ID token was sent instead of an access token |
+| OAuth 2.0 / OpenID Connect | The whole flow: authorization request, redirect back, token request and response, refresh, client authentication method |
+| SAML 2.0 | Decoded (and inflated) AuthnRequest and SAMLResponse: status, audience, destination, InResponseTo, validity window, signature |
+| NTLM | Binary handshake messages: type 1/2/3, domain, user, workstation, NTLMv1 or v2, and which TCP connection each message used |
+| Kerberos / Negotiate | SPNEGO tokens: Kerberos vs. NTLM fallback, and the server's accept/reject state |
+| HTTP Digest | User, realm, algorithm, stale nonces |
+| API keys | `X-API-Key`, `Ocp-Apim-Subscription-Key`, `api_key=` and similar |
+| Session cookies | Which cookies were set, with which attributes, and whether they were sent |
+| Signed URLs | AWS SigV4 (header and presigned URLs) and Azure SAS: signing time and expiry |
+| Others | Proxy authentication (407), client certificates (mutual TLS), AWS / Azure Storage error codes, OAuth 1.0a, Okta SSWS, custom schemes |
+
+**Failures it explains.** Some examples:
+
+- **Expired or wrong tokens:** the token expired (and by how long), was not valid yet, was
+  an ID token instead of an access token, has the wrong audience, or lacks a scope (it
+  compares the scopes required with the scopes in the token).
+- **Missing credentials:** the Authorization header was dropped on a cross-origin redirect or
+  missing from a request when earlier ones had it; a session cookie wasn't sent because of
+  SameSite, Secure, Path, expiry or deletion, or because a cross-origin fetch didn't send credentials.
+- **OAuth / OIDC:** PKCE `code_verifier` doesn't match the `code_challenge` (it recomputes
+  the SHA-256), `redirect_uri` or `client_id` mismatch, a reused or slow-to-redeem code,
+  `state` and `nonce` mismatches, revoked refresh tokens, `login_required` from silent renewal,
+  sign-in loops, every standard OAuth error code, and common Microsoft Entra ID `AADSTS` codes.
+- **SAML:** non-success status codes, wrong audience, wrong destination or ACS URL,
+  expired or not-yet-valid assertions, and missing signatures.
+- **Windows authentication:** an NTLM handshake split across TCP connections (load balancer
+  without affinity), NTLMv1, anonymous NTLM, Kerberos rejections, clock skew over 5 minutes, and
+  NTLM over HTTP/2.
+- **Everything else:** Basic credentials rejected; CSRF failures; a web application firewall
+  block (Cloudflare, Akamai, AWS WAF, Imperva…) reported as not an authentication problem;
+  expired presigned URLs and SAS tokens; S3/Azure signature, clock and permission errors;
+  proxies demanding credentials; missing client certificates; captive portals; and API calls
+  that got a sign-in page instead of data.
+
+Each failure shows the credentials sent, what the server asked for, the most likely cause
+(with how strong the evidence is), other possible causes, the evidence, and what to try.
+Normal challenge/response steps, such as the first 401 of NTLM, Kerberos or Basic, are listed
+separately so they don't look like failures. The tab also lists the methods used by each
+host, reconstructs every sign-in flow step by step with ✓/✗ checks, shows a table of every
+token seen, and warns when a server's clock differs from yours (from its `Date` headers).
+
+**Copy report / Download report** produces a Markdown summary you can paste into a ticket.
+Token values, passwords, cookie values, authorization codes, keys and signatures are removed
+from it.
+
+If a HAR was exported "sanitized" (no Authorization or Cookie headers at all), the tab says
+so rather than wrongly reporting that no credentials were sent.
+
 ## Filtering
 
 Type in the filter box. Plain words match the URL; prefix a word with `-` to exclude it.
@@ -82,6 +141,7 @@ You can combine these keys:
 | `mime:json` | content type contains |
 | `larger:100k` | transfer size over 100 KB (`b`, `k`, `m`, `g`) |
 | `slower:500ms` `slower:2s` | total time over |
+| `auth:fail` `auth:any` | requests with an authentication failure / with any authentication information |
 
 Tick **Search headers & bodies** to match words against headers, request bodies and
 response bodies too. For example, find which request returned a particular error message
@@ -134,11 +194,11 @@ npx playwright install chromium
 npm test
 ```
 
-Pass a directory as an argument to also save screenshots. To regenerate the sample after
-changing it:
+Pass a directory as an argument to `node test/smoke.mjs` or `node test/auth.mjs` to also save
+screenshots. To regenerate the samples after changing them:
 
 ```bash
-node test/make-sample.mjs
+npm run sample
 ```
 
 ## Project layout
@@ -147,8 +207,10 @@ node test/make-sample.mjs
 |---|---|
 | `har-analyzer.html` | The whole application: HTML, CSS and JavaScript in one file |
 | `sample/sample.har` | Synthetic HAR (all `example` domains, fake credentials) for trying it out |
+| `sample/auth-failures.har` | Synthetic HAR with one example of each common authentication failure |
 | `test/smoke.mjs` | End-to-end browser test (Playwright + Chromium) |
-| `test/make-sample.mjs` | Regenerates `sample/sample.har` |
+| `test/auth.mjs` | End-to-end test of the authentication analysis |
+| `test/make-sample.mjs`, `test/make-auth-sample.mjs` | Regenerate the sample HARs |
 
 ## License
 

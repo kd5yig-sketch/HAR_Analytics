@@ -5,8 +5,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node test/smoke.mjs",
-    "sample": "node test/make-sample.mjs"
+    "test": "node test/smoke.mjs && node test/auth.mjs",
+    "sample": "node test/make-sample.mjs && node test/make-auth-sample.mjs"
   },
   "devDependencies": {
     "playwright": "1.63.0"
