@@ -701,8 +701,6 @@ function diagSecurity() {
     const pw = /pass|pwd|secret/i.test(k);
     dAdd('security', pw ? 'error' : 'warn', list[0], (pw ? 'A password or secret' : 'A token or key') + ' is sent in the URL ("' + k + '", ' + list.length + ' request' + (list.length > 1 ? 's' : '') + ')', [C(pw ? 'high' : 'likely', 'secret_in_url', 'Secrets in query strings leak', 'URLs end up in server and proxy logs, browser history, analytics and the Referer header sent to other sites.', ['Send the value in an Authorization header or a POST body instead.'])], list.slice(0, 5).map(x => '#' + x.i + ' ' + x.host + x.u.pathname.slice(0, 80) + '?' + k + '=…'), list);
   }
-  const emails = S.entries.filter(e => e.u && /[\w.+-]+@[\w-]+\.[\w.-]+/.test(decodeURIComponentSafe(e.u.search)));
-  if (emails.length) dAdd('security', 'info', emails[0], emails.length + ' URL' + (emails.length > 1 ? 's contain' : ' contains') + ' an email address', [C('possible', 'pii_in_url', 'Personal data in URLs', 'Email addresses in URLs are logged and shared with third parties through Referer and analytics.', ['Send personal data in the request body.'])], [], emails);
   const insecure = S.entries.filter(e => e.u && e.u.protocol === 'http:' && !/^(localhost|127\.|\[::1\])/.test(e.u.hostname) && (hdr(reqH(e), 'cookie') || hdr(reqH(e), 'authorization') || /pass(word)?|pwd/i.test(reqBodyText(e))));
   if (insecure.length) dAdd('security', 'error', insecure[0], insecure.length + ' request' + (insecure.length > 1 ? 's' : '') + ' sent cookies, credentials or passwords over plain HTTP', [C('high', 'cleartext_creds', 'Sensitive data travelled unencrypted', 'Anyone on the network path (public Wi-Fi, ISP, proxy) can read and reuse it.', ['Serve the site over HTTPS only, redirect HTTP to HTTPS, mark cookies Secure, and enable HSTS.'])], insecure.map(x => '#' + x.i + ' ' + x.method + ' ' + x.url.slice(0, 120)), insecure);
   const docHosts = new Map();
@@ -745,7 +743,7 @@ const FINDING_CATS = new Set(['rules', 'cors', 'hidden', 'ratelimit', 'redirect'
 function runDiagnostics() {
   D.events = []; D.error = '';
   for (const e of S.entries) { e.diag = null; delete e._json; }
-  const steps = [diagRules, diagCors, diagNetwork, diagServer, diagRateLimit, diagHidden, diagRedirect, diagRealtime, diagHang, diagCache, diagPerf, diagSecurity];
+  const steps = [diagRules, diagCors, diagNetwork, diagServer, diagRateLimit, diagHidden, diagRedirect, diagRealtime, diagHang, diagCache, diagPerf, diagSecurity, diagPii];
   const errs = [];
   for (const f of steps) { try { f(); } catch (err) { errs.push(f.name + ': ' + ((err && err.message) || err)); } }
   D.error = errs.join('; ');

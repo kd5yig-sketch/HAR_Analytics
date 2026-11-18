@@ -107,19 +107,25 @@
 </main>
 
 <dialog id="dlg-export">
-  <h3>Export</h3>
+  <h3>Share safely</h3>
   <p class="muted" style="margin:0 0 10px">Files are created on this computer and saved through your browser’s normal download.</p>
-  <h4 style="margin:12px 0 4px">Redacted HAR (safe to share)</h4>
+  <div id="x-pii-summary" class="pii-summary"></div>
+  <h4 style="margin:12px 0 4px">Redaction</h4>
   <label><input type="checkbox" checked disabled> Mask Authorization, Cookie, Set-Cookie, API-key and CSRF headers, and all cookie values</label>
   <label><input type="checkbox" id="x-params" checked> Mask token-like URL and form parameters and JSON fields (token, key, secret, password, session, signature, code…)</label>
+  <label><input type="checkbox" id="x-pii" checked> Mask personal data: emails, phone numbers, card numbers, SSNs, IBANs and client IP addresses</label>
   <label><input type="checkbox" id="x-reqbody"> Remove request bodies entirely</label>
   <label><input type="checkbox" id="x-resbody" checked> Remove response bodies</label>
+  <p class="muted" style="margin:4px 0 0;font-size:12px">Extra patterns from Settings are always applied. Redaction is pattern-based: skim the result before sharing.</p>
   <div class="actions">
-    <button id="x-csv">Request list as CSV</button>
+    <button id="x-preview">Preview changes</button>
     <span class="spacer"></span>
     <button id="x-cancel">Cancel</button>
-    <button id="x-har" class="primary">Download redacted HAR</button>
+    <button id="x-har">Redacted HAR</button>
+    <button id="x-bundle" class="primary" title="A .zip with the redacted HAR, the diagnosis and authentication reports, the request list, your notes and a README">Case bundle (.zip)</button>
   </div>
+  <div id="x-preview-out"></div>
+  <p style="margin:12px 0 0"><button id="x-csv">Request list as CSV</button> <span class="muted" style="font-size:12px">(not redacted; for your own use)</span> <span class="muted" style="font-size:12px">· Notes in this file: <span id="x-notes-count">0</span></span></p>
 </dialog>
 <div id="toast"></div>
 <div id="loading" class="hidden" role="status" aria-live="polite"><div class="lbox"><div class="spin"></div><div id="loading-text">Loading…</div></div></div>

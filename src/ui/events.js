@@ -58,14 +58,13 @@ document.addEventListener('keydown', ev => {
   }
 });
 
-$('#btn-export').onclick = () => $('#dlg-export').showModal();
+$('#btn-export').onclick = openExport;
 $('#x-cancel').onclick = () => $('#dlg-export').close();
 $('#x-csv').onclick = () => { exportCsv(); $('#dlg-export').close(); };
-$('#x-har').onclick = () => {
-  const har = buildRedacted({ params: $('#x-params').checked, reqBody: $('#x-reqbody').checked, resBody: $('#x-resbody').checked });
-  download(S.fileName.replace(/\.(har|json)$/i, '') + '-redacted.har', JSON.stringify(har, null, 2), 'application/json');
-  $('#dlg-export').close(); toast('Redacted HAR saved');
-};
+$('#x-har').onclick = downloadRedacted;
+$('#x-bundle').onclick = downloadBundle;
+$('#x-preview').onclick = previewRedaction;
+for (const id of ['#x-params', '#x-pii', '#x-reqbody', '#x-resbody']) $(id).addEventListener('change', () => { if ($('#x-preview-out').childElementCount) previewRedaction(); });
 $('#btn-settings').onclick = () => { renderSettings(); show('settings'); };
 $('#settings-file').onchange = ev => { const f = ev.target.files[0]; ev.target.value = ''; if (f) importSettingsFile(f); };
 loadStoredSettings();

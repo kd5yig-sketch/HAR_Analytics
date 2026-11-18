@@ -6,6 +6,7 @@ import { readFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import assert from 'node:assert/strict';
+import { inflateRawSync } from 'node:zlib';
 
 const { chromium } = createRequire(import.meta.url)('playwright');
 const here = dirname(fileURLToPath(import.meta.url));
@@ -27,6 +28,19 @@ const open = async f => {
   await page.setInputFiles('#file', sample(f));
   await page.waitForFunction(n => document.querySelector('#fileinfo').textContent.startsWith(n) && document.querySelector('#loading').classList.contains('hidden'), f);
 };
+// Minimal .zip reader (central directory) to check the case bundle.
+function unzip(buf) {
+  const out = {}; let end = buf.length - 22; while (end >= 0 && buf.readUInt32LE(end) !== 0x06054b50) end--;
+  let p = buf.readUInt32LE(end + 16); const n = buf.readUInt16LE(end + 10);
+  for (let k = 0; k < n; k++) {
+    const method = buf.readUInt16LE(p + 10), csize = buf.readUInt32LE(p + 20), nlen = buf.readUInt16LE(p + 28), xlen = buf.readUInt16LE(p + 30), clen = buf.readUInt16LE(p + 32), off = buf.readUInt32LE(p + 42);
+    const name = buf.slice(p + 46, p + 46 + nlen).toString('utf8');
+    const lnl = buf.readUInt16LE(off + 26), lxl = buf.readUInt16LE(off + 28), data = buf.slice(off + 30 + lnl + lxl, off + 30 + lnl + lxl + csize);
+    out[name] = (method === 8 ? inflateRawSync(data) : data).toString('utf8');
+    p += 46 + nlen + xlen + clen;
+  }
+  return out;
+}
 const download = async (click) => { const [dl] = await Promise.all([page.waitForEvent('download'), click()]); return { name: dl.suggestedFilename(), path: await dl.path() }; };
 
 await page.goto(appUrl);
@@ -106,6 +120,70 @@ await step('settings: custom redaction patterns are applied to exported HARs', a
   page.once('dialog', d => d.accept());
   await page.click('#btn-settings');
   await page.click('#set-reset');
+});
+
+const PII = ['alex.example@mail.example', 'jane@mail.example', 'jane%40mail.example', '4111 1111 1111 1111', '123-45-6789', 'GB82 WEST 1234 5698 7654 32', '(512) 555-0147', '198.51.100.23', 'sample-opaque-token-1234567890'];
+
+await step('sharing: personal data is found, with validators keeping false alarms out', async () => {
+  await open('personal-data.har');
+  await page.click('#tabs button[data-view="diag"]');
+  const card = await page.textContent('#view-diag .acard[data-cause="pii"]');
+  assert.match(card, /Email address: 3/); assert.match(card, /Payment card number: 1 \(e\.g\. 41\*+1111\)/);
+  assert.match(card, /US Social Security number: 1/); assert.match(card, /Bank account \(IBAN\): 1/); assert.match(card, /Phone number: 1 /); assert.match(card, /Client IP address/);
+  assert.ok(!/4111111111111112|20261102160000/.test(card), 'near-misses must not be reported or shown');
+  await page.click('#btn-export');
+  assert.match(await page.textContent('#x-pii-summary'), /payment card number ×1/);
+});
+
+await step('sharing: preview lists every change, and the redacted HAR has no personal data', async () => {
+  await page.click('#x-preview');
+  const prev = await page.textContent('#x-preview-out');
+  for (const label of ['URLs (query parameters or personal data)', 'Request header: authorization', 'Request header: x-forwarded-for', 'Request bodies (fields masked)', 'Response bodies removed']) assert.ok(prev.includes(label), 'preview missing ' + label + '\n' + prev);
+  for (const v of PII) assert.ok(!prev.includes(v), 'preview shows ' + v);
+  await page.uncheck('#x-resbody');
+  await page.waitForFunction(() => /Response bodies \(fields masked\)/.test(document.querySelector('#x-preview-out').textContent));
+  const ex = await download(() => page.click('#x-har'));
+  const har = readFileSync(ex.path, 'utf8');
+  for (const v of PII) assert.ok(!har.includes(v), 'redacted HAR still contains ' + v);
+  assert.ok(har.includes('4111111111111112') && har.includes('A-1001'), 'non-personal values must be kept');
+  await page.click('#btn-export');
+  await page.uncheck('#x-pii');
+  const ex2 = await download(() => page.click('#x-har'));
+  assert.ok(readFileSync(ex2.path, 'utf8').includes('alex.example@mail.example'), 'personal data kept when masking is switched off');
+});
+
+await step('notes: star and annotate requests; notes persist, filter and show in rows', async () => {
+  await page.click('#tabs button[data-view="requests"]');
+  await page.fill('#q', 'api/checkout');
+  await page.waitForFunction(() => document.querySelectorAll('#rows .row').length === 1);
+  await page.click('#rows .row');
+  await page.click('#note-star');
+  await page.click('#note-btn');
+  await page.fill('#note-text', 'Customer says the order failed here; card ending 1111.');
+  await page.waitForTimeout(400);
+  assert.match(await page.textContent('#rows .row'), /★/);
+  await page.reload();
+  await open('personal-data.har');
+  await page.click('#tabs button[data-view="requests"]');
+  await page.fill('#q', 'note:any');
+  await page.waitForFunction(() => /^1 of 4/.test(document.querySelector('#count').textContent));
+  await page.click('#rows .row');
+  assert.equal(await page.inputValue('#note-text'), 'Customer says the order failed here; card ending 1111.');
+  await page.fill('#q', '');
+});
+
+await step('sharing: the case bundle contains every file and no secrets or personal data', async () => {
+  await page.click('#btn-export');
+  const ex = await download(() => page.click('#x-bundle'));
+  assert.equal(ex.name, 'personal-data-case.zip');
+  const files = unzip(readFileSync(ex.path));
+  assert.deepEqual(Object.keys(files).sort(), ['README.md', 'authentication.md', 'diagnosis.md', 'notes.md', 'personal-data-redacted.har', 'requests.csv']);
+  const all = Object.values(files).join('\n');
+  for (const v of PII) assert.ok(!all.includes(v), 'bundle contains ' + v);
+  assert.match(files['README.md'], /Payment card number: 1/); assert.match(files['README.md'], /Personal data \(emails.*\) masked/);
+  assert.match(files['notes.md'], /★ #2 POST https:\/\/checkout\.example-store\.com\/api\/checkout/);
+  assert.match(files['notes.md'], /Customer says the order failed here/);
+  JSON.parse(files['personal-data-redacted.har']);
 });
 
 await step('no network requests and no errors', async () => {

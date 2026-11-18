@@ -12,6 +12,7 @@ async function loadHar(har, name) {
   let n;
   try { await stage('Reading ' + name + '…'); n = normalize(har); } catch (err) { stageDone(); showLoadError(err.message); return; }
   Object.assign(S, { fileName: name, har, pages: n.pages, entries: n.entries, base: n.base, selected: null, types: new Set(), sort: { key: 'start', dir: 1 } });
+  loadNotes();
   await stage('Finding problems in ' + n.entries.length.toLocaleString() + ' requests…');
   analyze();
   await stage('Checking authentication…');
@@ -195,7 +196,7 @@ function parseQuery(s) {
   return s.trim().split(/\s+/).filter(Boolean).map(tok => {
     let neg = false;
     if (tok.length > 1 && tok[0] === '-') { neg = true; tok = tok.slice(1); }
-    const m = /^(status|method|domain|host|type|mime|larger|slower|auth|diag):(.+)$/i.exec(tok);
+    const m = /^(status|method|domain|host|type|mime|larger|slower|auth|diag|note):(.+)$/i.exec(tok);
     return m ? { neg, key: m[1].toLowerCase(), val: m[2].toLowerCase() } : { neg, key: null, val: tok.toLowerCase() };
   });
 }
@@ -224,6 +225,7 @@ function tokMatch(e, t, deep) {
     case 'mime': return e.mime.toLowerCase().includes(v);
     case 'larger': return e.transfer > parseSize(v);
     case 'slower': return e.time > parseDur(v);
+    case 'note': { const n = S.notes.get(e.i); return !!n && (v === 'starred' ? n.star : v === 'text' ? !!(n.text || '').trim() : n.star || !!(n.text || '').trim()); }
     case 'diag': return !!(e.diag && e.diag.some(x => !x.normal && (v === 'any' || x.cat === v || x.sev === v)));
     case 'auth': return v === 'fail' ? !!(e.auth && e.auth.event && !e.auth.event.normal) : !!(e.auth || e.oauthRole || e.saml);
     default: return (deep ? haystack(e) : e.url.toLowerCase()).includes(v);
@@ -294,7 +296,7 @@ function renderRows() {
       class: 'grid-row row' + (e === S.selected ? ' sel' : '') + (sc === 'err' ? ' st-err' : sc === 'warn' ? ' st-warn' : ''),
       style: { top: k * ROW_H + 'px' }, 'data-k': k, title: e.url
     },
-      h('div', { class: 'c-idx muted' }, ws ? h('span', { class: 'dot ' + ws }) : null, String(e.i)),
+      h('div', { class: 'c-idx muted' }, ws ? h('span', { class: 'dot ' + ws }) : null, String(e.i), noteMark(e)),
       h('div', { class: 'c-status', text: isFailed(e) ? 'failed' : String(e.status) }),
       h('div', { class: 'c-method', text: e.method }),
       h('div', { class: 'c-domain', text: e.host }),
@@ -366,6 +368,7 @@ function renderDetail() {
     $$('.dtabs button', pane).forEach(b => b.classList.toggle('active', b.dataset.tab === S.dtab));
   };
   const pane = $('#detail');
+  const nc = notesControls(e);
   pane.replaceChildren(
     h('div', { class: 'dhead' },
       h('div', { class: 'top' },
@@ -373,10 +376,11 @@ function renderDetail() {
         h('b', { text: e.method }),
         h('span', { class: 'muted', text: '#' + e.i + ' · ' + fmtMs(e.time) + ' · ' + fmtBytes(e.transfer) }),
         h('span', { class: 'spacer' }),
+        nc.star, nc.btn,
         h('button', { title: 'Copy URL', onclick: () => copyText(e.url), text: 'Copy URL' }),
         h('button', { title: 'Copy this request as a curl command', onclick: () => copyText(toCurl(e)), text: 'Copy as cURL' }),
         h('button', { title: 'Close (Esc)', onclick: () => select(null), text: '✕' })),
-      h('div', { class: 'url', text: e.url })),
+      h('div', { class: 'url', text: e.url }), nc.ta),
     h('div', { class: 'dtabs' }, tabs.map(([k, l]) => h('button', { 'data-tab': k, text: l, onclick: () => { S.dtab = k; fill(); } }))),
     body);
   fill();
@@ -488,16 +492,17 @@ function detailTab(e, tab) {
   return [];
 }
 
-function exportCsv() {
+function exportCsv() { download(S.fileName.replace(/\.(har|json)$/i, '') + '-requests.csv', csvText(S.filtered), 'text/csv'); }
+function csvText(list) {
   const cols = ['#', 'started_ms', 'method', 'status', 'status_text', 'url', 'domain', 'type', 'mime', 'transfer_bytes', 'content_bytes', 'time_ms', 'blocked_ms', 'dns_ms', 'connect_ms', 'tls_ms', 'send_ms', 'wait_ms', 'receive_ms', 'http_version', 'server_ip', 'error', 'findings'];
   const lines = [cols.join(',')];
-  for (const e of S.filtered) {
+  for (const e of list) {
     const t = e.timings;
     lines.push([e.i, Math.round(e.start), e.method, e.status, e.statusText, e.url, e.host, TYPE_LABEL[e.type], e.mime, e.transfer, e.contentSize, e.time.toFixed(1),
       t.blocked.toFixed(1), t.dns.toFixed(1), t.tcp.toFixed(1), t.ssl.toFixed(1), t.send.toFixed(1), t.wait.toFixed(1), t.receive.toFixed(1),
       e.httpVersion, e.serverIP, e.error, e.findings.map(f => RULES[f.code].title).join('; ')].map(csvCell).join(','));
   }
-  download(S.fileName.replace(/\.(har|json)$/i, '') + '-requests.csv', lines.join('\r\n'), 'text/csv');
+  return lines.join('\r\n');
 }
 
 /* ======================================================================
@@ -506,3 +511,5 @@ function exportCsv() {
    authentication / authorization / sign-in attempts and explains why
    each one failed, from evidence in the HAR.
    ====================================================================== */
+
+function noteMark(e) { const n = S.notes.get(e.i); if (!n || !(n.star || (n.text || '').trim())) return null; return h('span', { class: 'nmark', title: n.text || 'Bookmarked', text: n.star ? ' ★' : ' ✎' }); }

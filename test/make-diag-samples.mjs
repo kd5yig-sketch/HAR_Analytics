@@ -165,3 +165,16 @@ for (const broken of [false, true]) {
   if (broken) add({ at: 3600, ua, url: API + '/api/feature-flags', ip: apiIp, req: [['origin', APP]], status: 500, statusText: 'Internal Server Error', json: { error: 'flags service down' }, res: [['access-control-allow-origin', APP]] });
   save(broken ? 'compare-broken.har' : 'compare-working.har', { onContentLoad: 400, onLoad: broken ? 3700 : 1400 });
 }
+
+/* =================== personal-data.har =================== */
+{
+  const SHOP = 'https://checkout.example-store.com';
+  const { add, save } = builder(SHOP + '/', 'HAR Analytics personal-data sample generator');
+  add({ at: 0, type: 'document', url: SHOP + '/', mime: 'text/html', body: '<title>Checkout</title>' });
+  add({ at: 500, url: SHOP + '/api/checkout', req: [['x-forwarded-for', '198.51.100.23'], ['authorization', 'Bearer sample-opaque-token-1234567890']],
+    postJson: { name: 'Alex Example', email: 'alex.example@mail.example', phone: '+1 (512) 555-0147', card: '4111 1111 1111 1111', ssn: '123-45-6789', iban: 'GB82 WEST 1234 5698 7654 32' },
+    json: { orderId: 'A-1001', receiptEmail: 'alex.example@mail.example', total: 1299.99, createdAt: '2026-11-02T16:00:00Z', reference: '4111111111111112', stamp: '20261102160000', app: 'web 1.2.3.4' } });
+  add({ at: 900, url: SHOP + '/api/users?email=jane%40mail.example&page=2', json: { users: [{ id: 7, joined: '2025-03-14 09:30:00' }] } });
+  add({ at: 1200, url: SHOP + '/api/health', json: { status: 'ok', uptime: 123456789, build: '2026.11.02-1600' } });
+  save('personal-data.har', { onContentLoad: 300, onLoad: 600 });
+}

@@ -264,6 +264,16 @@ dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top
 .srow.rule .r-method { width: 80px; } .srow.rule .r-value { width: 140px; }
 button.icon { padding: 2px 8px; }
 #btn-settings.on { border-color: var(--accent); }
+
+/* Sharing and notes */
+.pii-summary { font-size: 12px; padding: 8px 10px; border-radius: 8px; background: var(--panel-2); }
+#x-preview-out { max-height: 40vh; overflow: auto; margin-top: 10px; }
+ul.preview-list { padding-left: 16px; font-size: 12px; } ul.preview-list ul { padding-left: 18px; }
+ul.preview-list li.mono { word-break: break-all; }
+dialog { max-width: 640px; }
+.note-text { width: 100%; margin-top: 8px; font: inherit; font-size: 12px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
+button.star { font-size: 15px; line-height: 1; } button.star.on { color: #d29e00; border-color: #d29e00; }
+.nmark { color: #d29e00; }
 </style>
 </head>
 <body>
@@ -359,19 +369,25 @@ button.icon { padding: 2px 8px; }
 </main>
 
 <dialog id="dlg-export">
-  <h3>Export</h3>
+  <h3>Share safely</h3>
   <p class="muted" style="margin:0 0 10px">Files are created on this computer and saved through your browser’s normal download.</p>
-  <h4 style="margin:12px 0 4px">Redacted HAR (safe to share)</h4>
+  <div id="x-pii-summary" class="pii-summary"></div>
+  <h4 style="margin:12px 0 4px">Redaction</h4>
   <label><input type="checkbox" checked disabled> Mask Authorization, Cookie, Set-Cookie, API-key and CSRF headers, and all cookie values</label>
   <label><input type="checkbox" id="x-params" checked> Mask token-like URL and form parameters and JSON fields (token, key, secret, password, session, signature, code…)</label>
+  <label><input type="checkbox" id="x-pii" checked> Mask personal data: emails, phone numbers, card numbers, SSNs, IBANs and client IP addresses</label>
   <label><input type="checkbox" id="x-reqbody"> Remove request bodies entirely</label>
   <label><input type="checkbox" id="x-resbody" checked> Remove response bodies</label>
+  <p class="muted" style="margin:4px 0 0;font-size:12px">Extra patterns from Settings are always applied. Redaction is pattern-based: skim the result before sharing.</p>
   <div class="actions">
-    <button id="x-csv">Request list as CSV</button>
+    <button id="x-preview">Preview changes</button>
     <span class="spacer"></span>
     <button id="x-cancel">Cancel</button>
-    <button id="x-har" class="primary">Download redacted HAR</button>
+    <button id="x-har">Redacted HAR</button>
+    <button id="x-bundle" class="primary" title="A .zip with the redacted HAR, the diagnosis and authentication reports, the request list, your notes and a README">Case bundle (.zip)</button>
   </div>
+  <div id="x-preview-out"></div>
+  <p style="margin:12px 0 0"><button id="x-csv">Request list as CSV</button> <span class="muted" style="font-size:12px">(not redacted; for your own use)</span> <span class="muted" style="font-size:12px">· Notes in this file: <span id="x-notes-count">0</span></span></p>
 </dialog>
 <div id="toast"></div>
 <div id="loading" class="hidden" role="status" aria-live="polite"><div class="lbox"><div class="spin"></div><div id="loading-text">Loading…</div></div></div>
@@ -708,8 +724,40 @@ function buildRedacted(opts) {
     }
     if (opts.resBody && e._webSocketMessages) delete e._webSocketMessages;
   }
-  har.log.comment = ((har.log.comment ? har.log.comment + ' ' : '') + 'Redacted with HAR Analyzer on ' + new Date().toISOString() + '.').trim();
+  if (opts.pii) {
+    // Mask personal data in every value (never in names, methods, dates or MIME types).
+    const SKIP = new Set(['name', 'method', 'httpVersion', 'startedDateTime', 'mimeType', 'encoding', '_resourceType', 'serverIPAddress', 'connection', 'pageref', 'id', 'expires', 'comment', 'version', 'statusText', '_priority']);
+    for (const e of har.log.entries || []) for (const side of [e.request, e.response]) for (const x of (side && side.headers) || []) if (CLIENT_IP_HEADERS.test(String(x.name))) x.value = RED;
+    har.log.entries = JSON.parse(JSON.stringify(har.log.entries), function (k, v) {
+      if (typeof v !== 'string' || SKIP.has(k)) return v;
+      if (k === 'text' && this && this.encoding === 'base64') return v;
+      return maskPii(v);
+    });
+  }
+  har.log.comment = ((har.log.comment ? har.log.comment + ' ' : '') + 'Redacted with HAR Analytics on ' + new Date().toISOString() + '.').trim();
   return har;
+}
+// What the redacted copy changes, grouped for the preview: Map(label → {count, examples})
+function redactionDiff(orig, red) {
+  const groups = new Map(), add = (label, ex) => { if (!groups.has(label)) groups.set(label, { count: 0, examples: [] }); const g = groups.get(label); g.count++; if (g.examples.length < 6 && ex) g.examples.push(ex); };
+  const short = v => { v = String(v == null ? '' : v); return v.length > 90 ? v.slice(0, 90) + '…' : v; };
+  (orig.log.entries || []).forEach((a, i) => {
+    const b = (red.log.entries || [])[i]; if (!b) return;
+    const n = '#' + (i + 1);
+    if (a.request.url !== b.request.url) add('URLs (query parameters or personal data)', n + ' ' + short(b.request.url));
+    for (const [sa, sb, side] of [[a.request, b.request, 'Request'], [a.response, b.response, 'Response']]) {
+      (sa.headers || []).forEach((x, k) => { const y = (sb.headers || [])[k]; if (y && x.value !== y.value) add(side + ' header: ' + String(x.name).toLowerCase(), n + ' → ' + short(y.value)); });
+      if ((sa.cookies || []).some((c, k) => (sb.cookies || [])[k] && c.value !== sb.cookies[k].value)) add(side + ' cookies', n);
+    }
+    const pa = a.request.postData, pb = b.request.postData;
+    if (pa && pb && (pa.text !== pb.text || JSON.stringify(pa.params) !== JSON.stringify(pb.params))) add(pb.text === '' && pa.text ? 'Request bodies removed' : 'Request bodies (fields masked)', n);
+    const ca = a.response.content || {}, cb = b.response.content || {};
+    if (ca.text != null && cb.text == null) add('Response bodies removed', n);
+    else if (ca.text != null && ca.text !== cb.text) add('Response bodies (fields masked)', n);
+    if (a.response.redirectURL !== b.response.redirectURL) add('Redirect targets', n);
+  });
+  (orig.log.pages || []).forEach((p, i) => { const q = (red.log.pages || [])[i]; if (q && p.title !== q.title) add('Page titles', short(q.title)); });
+  return groups;
 }
 function csvCell(v) { v = v == null ? '' : String(v); return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
 
@@ -2549,8 +2597,6 @@ function diagSecurity() {
     const pw = /pass|pwd|secret/i.test(k);
     dAdd('security', pw ? 'error' : 'warn', list[0], (pw ? 'A password or secret' : 'A token or key') + ' is sent in the URL ("' + k + '", ' + list.length + ' request' + (list.length > 1 ? 's' : '') + ')', [C(pw ? 'high' : 'likely', 'secret_in_url', 'Secrets in query strings leak', 'URLs end up in server and proxy logs, browser history, analytics and the Referer header sent to other sites.', ['Send the value in an Authorization header or a POST body instead.'])], list.slice(0, 5).map(x => '#' + x.i + ' ' + x.host + x.u.pathname.slice(0, 80) + '?' + k + '=…'), list);
   }
-  const emails = S.entries.filter(e => e.u && /[\w.+-]+@[\w-]+\.[\w.-]+/.test(decodeURIComponentSafe(e.u.search)));
-  if (emails.length) dAdd('security', 'info', emails[0], emails.length + ' URL' + (emails.length > 1 ? 's contain' : ' contains') + ' an email address', [C('possible', 'pii_in_url', 'Personal data in URLs', 'Email addresses in URLs are logged and shared with third parties through Referer and analytics.', ['Send personal data in the request body.'])], [], emails);
   const insecure = S.entries.filter(e => e.u && e.u.protocol === 'http:' && !/^(localhost|127\.|\[::1\])/.test(e.u.hostname) && (hdr(reqH(e), 'cookie') || hdr(reqH(e), 'authorization') || /pass(word)?|pwd/i.test(reqBodyText(e))));
   if (insecure.length) dAdd('security', 'error', insecure[0], insecure.length + ' request' + (insecure.length > 1 ? 's' : '') + ' sent cookies, credentials or passwords over plain HTTP', [C('high', 'cleartext_creds', 'Sensitive data travelled unencrypted', 'Anyone on the network path (public Wi-Fi, ISP, proxy) can read and reuse it.', ['Serve the site over HTTPS only, redirect HTTP to HTTPS, mark cookies Secure, and enable HSTS.'])], insecure.map(x => '#' + x.i + ' ' + x.method + ' ' + x.url.slice(0, 120)), insecure);
   const docHosts = new Map();
@@ -2593,7 +2639,7 @@ const FINDING_CATS = new Set(['rules', 'cors', 'hidden', 'ratelimit', 'redirect'
 function runDiagnostics() {
   D.events = []; D.error = '';
   for (const e of S.entries) { e.diag = null; delete e._json; }
-  const steps = [diagRules, diagCors, diagNetwork, diagServer, diagRateLimit, diagHidden, diagRedirect, diagRealtime, diagHang, diagCache, diagPerf, diagSecurity];
+  const steps = [diagRules, diagCors, diagNetwork, diagServer, diagRateLimit, diagHidden, diagRedirect, diagRealtime, diagHang, diagCache, diagPerf, diagSecurity, diagPii];
   const errs = [];
   for (const f of steps) { try { f(); } catch (err) { errs.push(f.name + ': ' + ((err && err.message) || err)); } }
   D.error = errs.join('; ');
@@ -2823,6 +2869,135 @@ function diagRules() {
   }
 }
 
+// ---- src/core/pii.js ----
+/* ---------- personal data (PII) detection ----------
+   Finds personal data in URLs, headers, cookies and bodies so it can be
+   reported and masked before a HAR is shared. Validators (Luhn for card
+   numbers, mod-97 for IBANs, SSN ranges) keep false alarms down. */
+function luhnOk(digits) {
+  let sum = 0, alt = false;
+  for (let i = digits.length - 1; i >= 0; i--) { let d = digits.charCodeAt(i) - 48; if (alt) { d *= 2; if (d > 9) d -= 9; } sum += d; alt = !alt; }
+  return sum % 10 === 0;
+}
+function ibanOk(s) {
+  s = s.replace(/\s+/g, '').toUpperCase();
+  if (!/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(s)) return false;
+  const r = s.slice(4) + s.slice(0, 4);
+  let m = 0; for (const ch of r) { const v = /\d/.test(ch) ? ch : String(ch.charCodeAt(0) - 55); for (const d of v) m = (m * 10 + (+d)) % 97; }
+  return m === 1;
+}
+const PII_KINDS = {
+  email: { label: 'Email address', re: /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g, ok: () => true },
+  card: { label: 'Payment card number', re: /(?<![\d.])(?:\d[ -]?){12,18}\d(?![\d.])/g, ok: m => { const d = m.replace(/\D/g, ''); return d.length >= 13 && d.length <= 19 && !/^(\d)\1+$/.test(d) && /^[2-6]/.test(d) && luhnOk(d); } },
+  ssn: { label: 'US Social Security number', re: /(?<![\d-])(?!000|666|9\d\d)\d{3}-(?!00)\d{2}-(?!0000)\d{4}(?![\d-])/g, ok: () => true },
+  iban: { label: 'Bank account (IBAN)', re: /\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,4})?\b/g, ok: ibanOk },
+  phone: { label: 'Phone number', re: /(?<![\w.:/-])(?:\+\d{1,3}[ .-]?)?(?:\(\d{2,4}\)[ .-]?|\d{2,4}[ .-])\d{3,4}[ .-]\d{3,4}(?![\w.:/-])/g, ok: m => { const d = m.replace(/\D/g, ''); return d.length >= 9 && d.length <= 15 && !/^(19|20)\d{2}[01]\d[0-3]\d/.test(d); } },
+};
+const CLIENT_IP_HEADERS = /^(x-forwarded-for|x-real-ip|cf-connecting-ip|true-client-ip|x-client-ip|forwarded)$/i;
+function maskSample(kind, m) {
+  if (kind === 'email') { const [u, d] = m.split('@'); return u[0] + '***@' + d; }
+  const d = m.replace(/\s/g, '');
+  return d.length > 6 ? d.slice(0, 2) + '*'.repeat(Math.max(3, d.length - 6)) + d.slice(-4) : '***';
+}
+const PII_ORDER = ['email', 'card', 'iban', 'ssn', 'phone']; // specific patterns first; a phone match inside one of them is dropped
+function piiInText(text, kinds) {
+  const out = [];
+  if (!text || typeof text !== 'string') return out;
+  const want = new Set(kinds || PII_ORDER);
+  for (const k of PII_ORDER) {
+    if (!want.has(k)) continue;
+    const P = PII_KINDS[k]; P.re.lastIndex = 0;
+    let m;
+    while ((m = P.re.exec(text))) {
+      const a = m.index, b = a + m[0].length;
+      if (P.ok(m[0]) && !out.some(x => a < x.index + x.value.length && x.index < b)) out.push({ kind: k, value: m[0], index: a });
+      if (out.length > 500) return out;
+    }
+  }
+  return out;
+}
+// Scan every entry; returns { byKind: Map(kind → {count, samples:Set, entries:Set}), hits: [{e, where, kind, sample}] }
+function scanPii(entries) {
+  const byKind = new Map(), hits = [];
+  const note = (e, where, kind, value) => {
+    if (!byKind.has(kind)) byKind.set(kind, { count: 0, samples: new Set(), entries: new Set() });
+    const k = byKind.get(kind); k.count++; if (k.samples.size < 5) k.samples.add(maskSample(kind, value)); k.entries.add(e);
+    if (hits.length < 2000) hits.push({ e, where, kind, sample: maskSample(kind, value) });
+  };
+  for (const e of entries) {
+    const req = e.raw.request || {}, res = e.raw.response || {};
+    let url = e.url; try { url = decodeURIComponent(e.url); } catch (_) { /* keep raw */ }
+    for (const f of piiInText(url, ['email', 'card', 'ssn', 'phone', 'iban'])) note(e, 'URL', f.kind, f.value);
+    for (const [list, side] of [[req.headers, 'request header'], [res.headers, 'response header']]) for (const x of (list || [])) {
+      const n = String(x.name), v = String(x.value || '');
+      if (/^(authorization|cookie|set-cookie|:path|referer|location|date|expires|last-modified|etag|content-security-policy)$/i.test(n)) continue;
+      if (CLIENT_IP_HEADERS.test(n)) { for (const ip of v.match(/\b\d{1,3}(?:\.\d{1,3}){3}\b|[0-9a-f]{1,4}(?::[0-9a-f]{0,4}){2,7}/gi) || []) note(e, side + ' ' + n, 'ip', ip); continue; }
+      for (const f of piiInText(v, ['email', 'phone', 'card', 'ssn'])) note(e, side + ' ' + n, f.kind, f.value);
+    }
+    if (req.postData && req.postData.text) for (const f of piiInText(String(req.postData.text).slice(0, 2e6))) note(e, 'request body', f.kind, f.value);
+    const body = (res.content && res.content.text && (res.content.encoding !== 'base64' || isTextMime(e.mime))) ? bodyText(res.content) : null;
+    if (body) for (const f of piiInText(body.slice(0, 2e6))) note(e, 'response body', f.kind, f.value);
+  }
+  return { byKind, hits };
+}
+PII_KINDS.ip = { label: 'Client IP address (forwarding header)', re: /$^/g, ok: () => true };
+// Mask PII inside a string (used by the redacted export).
+function maskPii(s) {
+  if (typeof s !== 'string' || s.length < 6) return s;
+  // Percent-encoded emails in URLs and form bodies (jane%40example.com)
+  s = s.replace(/[A-Za-z0-9._+-]+%40[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/gi, '[REDACTED]');
+  for (const k of PII_ORDER) { const P = PII_KINDS[k]; s = s.replace(P.re, m => (P.ok(m) ? '[REDACTED]' : m)); }
+  return s;
+}
+function diagPii() {
+  const { byKind } = scanPii(S.entries);
+  if (!byKind.size) return;
+  const all = new Set(); for (const v of byKind.values()) for (const e of v.entries) all.add(e);
+  const list = [...all].sort((a, b) => a.start - b.start);
+  const strong = ['card', 'ssn', 'iban'].some(k => byKind.has(k));
+  dAdd('security', strong ? 'warn' : 'info', list[0], 'Personal data found in ' + list.length + ' request' + (list.length > 1 ? 's' : '') + ': ' + [...byKind].map(([k, v]) => v.count + ' × ' + PII_KINDS[k].label.toLowerCase()).join(', '),
+    [C(strong ? 'likely' : 'possible', 'pii', 'This HAR contains personal data', 'Before sharing it, use Export → Redacted HAR with "Mask personal data" (on by default). Personal data in URLs also ends up in server logs, analytics and Referer headers.', ['Export a redacted copy before sharing; avoid putting personal data in URLs.'])],
+    [...byKind].map(([k, v]) => PII_KINDS[k].label + ': ' + v.count + ' (e.g. ' + [...v.samples].join(', ') + ')'), list);
+}
+
+// ---- src/core/zip.js ----
+/* ---------- zip writer ----------
+   Builds a standard .zip in memory (deflate via CompressionStream when the
+   runtime has it, otherwise stored uncompressed). Used for the case bundle. */
+const CRC_TABLE = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(u8) { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = CRC_TABLE[(c ^ u8[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+async function deflateBytes(u8) {
+  if (typeof CompressionStream === 'undefined') return null;
+  try { const s = new Blob([u8]).stream().pipeThrough(new CompressionStream('deflate-raw')); return new Uint8Array(await new Response(s).arrayBuffer()); } catch (_) { return null; }
+}
+async function makeZip(files, when = new Date()) {
+  const enc = new TextEncoder(), parts = [], central = [];
+  const dosTime = (when.getHours() << 11) | (when.getMinutes() << 5) | (when.getSeconds() >> 1);
+  const dosDate = ((when.getFullYear() - 1980) << 9) | ((when.getMonth() + 1) << 5) | when.getDate();
+  let offset = 0;
+  for (const f of files) {
+    const name = enc.encode(f.name), data = typeof f.data === 'string' ? enc.encode(f.data) : f.data;
+    const crc = crc32(data), z = await deflateBytes(data), useZ = z && z.length < data.length, body = useZ ? z : data;
+    const head = new DataView(new ArrayBuffer(30));
+    head.setUint32(0, 0x04034b50, true); head.setUint16(4, 20, true); head.setUint16(6, 0x0800, true); head.setUint16(8, useZ ? 8 : 0, true);
+    head.setUint16(10, dosTime, true); head.setUint16(12, dosDate, true); head.setUint32(14, crc, true);
+    head.setUint32(18, body.length, true); head.setUint32(22, data.length, true); head.setUint16(26, name.length, true); head.setUint16(28, 0, true);
+    parts.push(new Uint8Array(head.buffer), name, body);
+    const cd = new DataView(new ArrayBuffer(46));
+    cd.setUint32(0, 0x02014b50, true); cd.setUint16(4, 20, true); cd.setUint16(6, 20, true); cd.setUint16(8, 0x0800, true); cd.setUint16(10, useZ ? 8 : 0, true);
+    cd.setUint16(12, dosTime, true); cd.setUint16(14, dosDate, true); cd.setUint32(16, crc, true); cd.setUint32(20, body.length, true); cd.setUint32(24, data.length, true);
+    cd.setUint16(28, name.length, true); cd.setUint32(42, offset, true);
+    central.push(new Uint8Array(cd.buffer), name);
+    offset += 30 + name.length + body.length;
+  }
+  const cdSize = central.reduce((a, p) => a + p.length, 0);
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true); end.setUint16(8, files.length, true); end.setUint16(10, files.length, true); end.setUint32(12, cdSize, true); end.setUint32(16, offset, true);
+  const all = [...parts, ...central, new Uint8Array(end.buffer)], out = new Uint8Array(all.reduce((a, p) => a + p.length, 0));
+  let at = 0; for (const p of all) { out.set(p, at); at += p.length; }
+  return out;
+}
+
 // ---- src/ui/dom.js ----
 /* ---------- small helpers ---------- */
 const $ = (s, r = document) => r.querySelector(s);
@@ -2890,6 +3065,7 @@ async function loadHar(har, name) {
   let n;
   try { await stage('Reading ' + name + '…'); n = normalize(har); } catch (err) { stageDone(); showLoadError(err.message); return; }
   Object.assign(S, { fileName: name, har, pages: n.pages, entries: n.entries, base: n.base, selected: null, types: new Set(), sort: { key: 'start', dir: 1 } });
+  loadNotes();
   await stage('Finding problems in ' + n.entries.length.toLocaleString() + ' requests…');
   analyze();
   await stage('Checking authentication…');
@@ -3073,7 +3249,7 @@ function parseQuery(s) {
   return s.trim().split(/\s+/).filter(Boolean).map(tok => {
     let neg = false;
     if (tok.length > 1 && tok[0] === '-') { neg = true; tok = tok.slice(1); }
-    const m = /^(status|method|domain|host|type|mime|larger|slower|auth|diag):(.+)$/i.exec(tok);
+    const m = /^(status|method|domain|host|type|mime|larger|slower|auth|diag|note):(.+)$/i.exec(tok);
     return m ? { neg, key: m[1].toLowerCase(), val: m[2].toLowerCase() } : { neg, key: null, val: tok.toLowerCase() };
   });
 }
@@ -3102,6 +3278,7 @@ function tokMatch(e, t, deep) {
     case 'mime': return e.mime.toLowerCase().includes(v);
     case 'larger': return e.transfer > parseSize(v);
     case 'slower': return e.time > parseDur(v);
+    case 'note': { const n = S.notes.get(e.i); return !!n && (v === 'starred' ? n.star : v === 'text' ? !!(n.text || '').trim() : n.star || !!(n.text || '').trim()); }
     case 'diag': return !!(e.diag && e.diag.some(x => !x.normal && (v === 'any' || x.cat === v || x.sev === v)));
     case 'auth': return v === 'fail' ? !!(e.auth && e.auth.event && !e.auth.event.normal) : !!(e.auth || e.oauthRole || e.saml);
     default: return (deep ? haystack(e) : e.url.toLowerCase()).includes(v);
@@ -3172,7 +3349,7 @@ function renderRows() {
       class: 'grid-row row' + (e === S.selected ? ' sel' : '') + (sc === 'err' ? ' st-err' : sc === 'warn' ? ' st-warn' : ''),
       style: { top: k * ROW_H + 'px' }, 'data-k': k, title: e.url
     },
-      h('div', { class: 'c-idx muted' }, ws ? h('span', { class: 'dot ' + ws }) : null, String(e.i)),
+      h('div', { class: 'c-idx muted' }, ws ? h('span', { class: 'dot ' + ws }) : null, String(e.i), noteMark(e)),
       h('div', { class: 'c-status', text: isFailed(e) ? 'failed' : String(e.status) }),
       h('div', { class: 'c-method', text: e.method }),
       h('div', { class: 'c-domain', text: e.host }),
@@ -3244,6 +3421,7 @@ function renderDetail() {
     $$('.dtabs button', pane).forEach(b => b.classList.toggle('active', b.dataset.tab === S.dtab));
   };
   const pane = $('#detail');
+  const nc = notesControls(e);
   pane.replaceChildren(
     h('div', { class: 'dhead' },
       h('div', { class: 'top' },
@@ -3251,10 +3429,11 @@ function renderDetail() {
         h('b', { text: e.method }),
         h('span', { class: 'muted', text: '#' + e.i + ' · ' + fmtMs(e.time) + ' · ' + fmtBytes(e.transfer) }),
         h('span', { class: 'spacer' }),
+        nc.star, nc.btn,
         h('button', { title: 'Copy URL', onclick: () => copyText(e.url), text: 'Copy URL' }),
         h('button', { title: 'Copy this request as a curl command', onclick: () => copyText(toCurl(e)), text: 'Copy as cURL' }),
         h('button', { title: 'Close (Esc)', onclick: () => select(null), text: '✕' })),
-      h('div', { class: 'url', text: e.url })),
+      h('div', { class: 'url', text: e.url }), nc.ta),
     h('div', { class: 'dtabs' }, tabs.map(([k, l]) => h('button', { 'data-tab': k, text: l, onclick: () => { S.dtab = k; fill(); } }))),
     body);
   fill();
@@ -3366,16 +3545,17 @@ function detailTab(e, tab) {
   return [];
 }
 
-function exportCsv() {
+function exportCsv() { download(S.fileName.replace(/\.(har|json)$/i, '') + '-requests.csv', csvText(S.filtered), 'text/csv'); }
+function csvText(list) {
   const cols = ['#', 'started_ms', 'method', 'status', 'status_text', 'url', 'domain', 'type', 'mime', 'transfer_bytes', 'content_bytes', 'time_ms', 'blocked_ms', 'dns_ms', 'connect_ms', 'tls_ms', 'send_ms', 'wait_ms', 'receive_ms', 'http_version', 'server_ip', 'error', 'findings'];
   const lines = [cols.join(',')];
-  for (const e of S.filtered) {
+  for (const e of list) {
     const t = e.timings;
     lines.push([e.i, Math.round(e.start), e.method, e.status, e.statusText, e.url, e.host, TYPE_LABEL[e.type], e.mime, e.transfer, e.contentSize, e.time.toFixed(1),
       t.blocked.toFixed(1), t.dns.toFixed(1), t.tcp.toFixed(1), t.ssl.toFixed(1), t.send.toFixed(1), t.wait.toFixed(1), t.receive.toFixed(1),
       e.httpVersion, e.serverIP, e.error, e.findings.map(f => RULES[f.code].title).join('; ')].map(csvCell).join(','));
   }
-  download(S.fileName.replace(/\.(har|json)$/i, '') + '-requests.csv', lines.join('\r\n'), 'text/csv');
+  return lines.join('\r\n');
 }
 
 /* ======================================================================
@@ -3384,6 +3564,8 @@ function exportCsv() {
    authentication / authorization / sign-in attempts and explains why
    each one failed, from evidence in the HAR.
    ====================================================================== */
+
+function noteMark(e) { const n = S.notes.get(e.i); if (!n || !(n.star || (n.text || '').trim())) return null; return h('span', { class: 'nmark', title: n.text || 'Bookmarked', text: n.star ? ' ★' : ' ✎' }); }
 
 // ---- src/ui/auth-view.js ----
 /* ---------- Authentication view ---------- */
@@ -3687,6 +3869,101 @@ function importSettingsFile(f) {
   r.readAsText(f);
 }
 
+// ---- src/ui/share-view.js ----
+/* ---------- notes and bookmarks ----------
+   Per-request notes and stars, kept in memory and remembered in this browser
+   for the same file (by name, size and first timestamp). */
+S.notes = new Map();
+function notesKey() { const e0 = S.entries[0]; return 'har-analytics.notes.' + shortHash(S.fileName + '|' + S.entries.length + '|' + (e0 ? e0.raw.startedDateTime : '')); }
+function loadNotes() {
+  S.notes = new Map();
+  try { const raw = localStorage.getItem(notesKey()); if (raw) for (const [i, n] of JSON.parse(raw)) S.notes.set(+i, n); } catch (_) { /* storage unavailable */ }
+}
+function saveNotes() { try { const list = [...S.notes].filter(([, n]) => n.star || (n.text || '').trim()); if (list.length) localStorage.setItem(notesKey(), JSON.stringify(list)); else localStorage.removeItem(notesKey()); } catch (_) { /* storage unavailable */ } }
+const noteOf = e => S.notes.get(e.i) || { star: false, text: '' };
+function setNote(e, patch) { S.notes.set(e.i, { ...noteOf(e), ...patch }); saveNotes(); }
+function notesControls(e) {
+  const n = noteOf(e);
+  const star = h('button', { class: 'icon star' + (n.star ? ' on' : ''), id: 'note-star', title: n.star ? 'Remove bookmark' : 'Bookmark this request', 'aria-pressed': n.star ? 'true' : 'false', text: n.star ? '★' : '☆' });
+  star.onclick = () => { setNote(e, { star: !noteOf(e).star }); renderDetail(); renderRows(); };
+  const ta = h('textarea', { id: 'note-text', class: 'note-text' + (n.text ? '' : ' hidden'), rows: 2, placeholder: 'Your note about this request (kept in this browser; included in the case bundle)' }, n.text || '');
+  let t; ta.oninput = () => { clearTimeout(t); t = setTimeout(() => { setNote(e, { text: ta.value }); renderRows(); }, 250); };
+  const btn = h('button', { id: 'note-btn', title: 'Add a note', text: n.text ? 'Note' : 'Add note' });
+  btn.onclick = () => { ta.classList.toggle('hidden'); if (!ta.classList.contains('hidden')) ta.focus(); };
+  return { star, btn, ta };
+}
+function notesMarkdown(mask) {
+  const list = S.entries.filter(e => { const n = S.notes.get(e.i); return n && (n.star || (n.text || '').trim()); });
+  if (!list.length) return '';
+  const L = ['# Notes', '', 'Bookmarked and annotated requests from ' + S.fileName + '.', ''];
+  for (const e of list) {
+    const n = S.notes.get(e.i);
+    L.push('## ' + (n.star ? '★ ' : '') + '#' + e.i + ' ' + e.method + ' ' + redactUrl(e.url) + ' → ' + (e.status || 'no response'), '');
+    if ((n.text || '').trim()) L.push(n.text.trim(), '');
+  }
+  const md = scrub(L.join('\n'));
+  return mask ? maskPii(md) : md;
+}
+
+/* ---------- export dialog: personal data, preview, bundle ---------- */
+const exportOpts = () => ({ params: $('#x-params').checked, reqBody: $('#x-reqbody').checked, resBody: $('#x-resbody').checked, pii: $('#x-pii').checked });
+function openExport() {
+  $('#x-preview-out').replaceChildren();
+  const { byKind } = scanPii(S.entries);
+  const box = $('#x-pii-summary');
+  box.replaceChildren(byKind.size
+    ? h('div', null, h('b', { text: 'Personal data found: ' }), [...byKind].map(([k, v]) => PII_KINDS[k].label.toLowerCase() + ' ×' + v.count).join(', '), h('span', { class: 'muted', text: ' (e.g. ' + [...byKind.values()].flatMap(v => [...v.samples]).slice(0, 4).join(', ') + ')' }))
+    : h('span', { class: 'muted', text: 'No personal data patterns found (emails, phone numbers, card numbers, SSNs, IBANs, client IPs).' }));
+  $('#x-notes-count').textContent = [...S.notes.values()].filter(n => n.star || (n.text || '').trim()).length;
+  $('#dlg-export').showModal();
+}
+function previewRedaction() {
+  const red = buildRedacted(exportOpts()), groups = redactionDiff(S.har, red);
+  const out = $('#x-preview-out');
+  if (!groups.size) { out.replaceChildren(h('p', { class: 'note', text: 'Nothing would change with these options.' })); return; }
+  const total = [...groups.values()].reduce((a, g) => a + g.count, 0);
+  out.replaceChildren(h('p', { class: 'note', text: total + ' change' + (total > 1 ? 's' : '') + ' in ' + groups.size + ' categor' + (groups.size > 1 ? 'ies' : 'y') + '. Values shown are after redaction.' }),
+    h('ul', { class: 'preview-list' }, [...groups].sort((a, b) => b[1].count - a[1].count).map(([label, g]) => h('li', null, h('details', null, h('summary', null, h('b', { text: label }), ' — ' + g.count),
+      h('ul', null, g.examples.map(x => h('li', { class: 'mono', text: x })), g.count > g.examples.length ? h('li', { class: 'muted', text: '… and ' + (g.count - g.examples.length) + ' more' }) : null))))));
+}
+const baseName = () => S.fileName.replace(/\.(har|json)$/i, '');
+function downloadRedacted() {
+  const har = buildRedacted(exportOpts());
+  download(baseName() + '-redacted.har', JSON.stringify(har, null, 2), 'application/json');
+  $('#dlg-export').close(); toast('Redacted HAR saved');
+}
+async function downloadBundle() {
+  const o = exportOpts(), har = buildRedacted(o), mask = s => (o.pii ? maskPii(s) : s);
+  const { byKind } = scanPii(S.entries), notes = notesMarkdown(o.pii), groups = redactionDiff(S.har, har);
+  const files = [
+    { name: baseName() + '-redacted.har', data: JSON.stringify(har, null, 2) },
+    { name: 'diagnosis.md', data: mask(diagReport()) },
+    { name: 'authentication.md', data: mask(authReport()) },
+    { name: 'requests.csv', data: mask(scrub(csvText(S.entries).split('\r\n').map((l, k) => k === 0 ? l : l.replace(/https?:\/\/[^,"]+/g, u => redactUrl(u))).join('\r\n'))) },
+  ];
+  if (notes) files.push({ name: 'notes.md', data: notes });
+  const readme = ['# Case bundle: ' + S.fileName, '',
+    '- Created: ' + new Date().toISOString() + ' with HAR Analytics (locally; nothing was uploaded)',
+    '- Capture: ' + S.entries.length + ' requests starting ' + fmtDate(S.base),
+    '- Diagnosis: ' + diagSummaryText(), '- Authentication: ' + verdictText(), '',
+    '## Redaction applied to the HAR', '',
+    '- Authorization, Cookie, Set-Cookie, API-key and CSRF headers and all cookie values masked',
+    o.params ? '- Token-like URL / form parameters and JSON fields masked' : '- Token-like parameters NOT masked',
+    o.reqBody ? '- Request bodies removed' : '- Request bodies kept',
+    o.resBody ? '- Response bodies removed' : '- Response bodies kept',
+    o.pii ? '- Personal data (emails, phone numbers, card numbers, SSNs, IBANs, client IPs) masked' : '- Personal data NOT masked',
+    SETTINGS.redactPatterns.length ? '- ' + SETTINGS.redactPatterns.length + ' custom pattern(s) from settings masked' : '', '',
+    'Changes: ' + ([...groups].map(([l, g]) => l + ' (' + g.count + ')').join('; ') || 'none'), '',
+    '## Personal data found in the original capture', '', byKind.size ? [...byKind].map(([k, v]) => '- ' + PII_KINDS[k].label + ': ' + v.count).join('\n') : 'None found.', '',
+    '## Files', '', ...files.map(f => '- ' + f.name)].filter(x => x !== '').join('\n') + '\n';
+  files.unshift({ name: 'README.md', data: readme });
+  await stage('Building the case bundle…');
+  const zip = await makeZip(files);
+  stageDone();
+  download(baseName() + '-case.zip', zip, 'application/zip');
+  $('#dlg-export').close(); toast('Case bundle saved');
+}
+
 // ---- src/ui/events.js ----
 /* ---------- events ---------- */
 $('#btn-open').onclick = $('#btn-open2').onclick = () => $('#file').click();
@@ -3748,14 +4025,13 @@ document.addEventListener('keydown', ev => {
   }
 });
 
-$('#btn-export').onclick = () => $('#dlg-export').showModal();
+$('#btn-export').onclick = openExport;
 $('#x-cancel').onclick = () => $('#dlg-export').close();
 $('#x-csv').onclick = () => { exportCsv(); $('#dlg-export').close(); };
-$('#x-har').onclick = () => {
-  const har = buildRedacted({ params: $('#x-params').checked, reqBody: $('#x-reqbody').checked, resBody: $('#x-resbody').checked });
-  download(S.fileName.replace(/\.(har|json)$/i, '') + '-redacted.har', JSON.stringify(har, null, 2), 'application/json');
-  $('#dlg-export').close(); toast('Redacted HAR saved');
-};
+$('#x-har').onclick = downloadRedacted;
+$('#x-bundle').onclick = downloadBundle;
+$('#x-preview').onclick = previewRedaction;
+for (const id of ['#x-params', '#x-pii', '#x-reqbody', '#x-resbody']) $(id).addEventListener('change', () => { if ($('#x-preview-out').childElementCount) previewRedaction(); });
 $('#btn-settings').onclick = () => { renderSettings(); show('settings'); };
 $('#settings-file').onchange = ev => { const f = ev.target.files[0]; ev.target.value = ''; if (f) importSettingsFile(f); };
 loadStoredSettings();

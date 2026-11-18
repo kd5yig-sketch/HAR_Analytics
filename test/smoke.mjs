@@ -140,7 +140,8 @@ await step('exports a redacted HAR with secrets removed', async () => {
   }
   const har = JSON.parse(text);
   assert.equal(har.log.entries.length, 33);
-  assert.ok(text.includes('alex@example.com'), 'non-sensitive data should be kept');
+  assert.ok(!text.includes('alex@example.com'), 'personal data (email) should be masked by default');
+  assert.ok(text.includes('https://www.shop.example.com/api/login'), 'non-sensitive data should be kept');
 });
 
 await step('exports the filtered request list as CSV', async () => {

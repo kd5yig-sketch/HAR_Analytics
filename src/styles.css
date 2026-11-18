@@ -251,3 +251,13 @@ dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top
 .srow.rule .r-method { width: 80px; } .srow.rule .r-value { width: 140px; }
 button.icon { padding: 2px 8px; }
 #btn-settings.on { border-color: var(--accent); }
+
+/* Sharing and notes */
+.pii-summary { font-size: 12px; padding: 8px 10px; border-radius: 8px; background: var(--panel-2); }
+#x-preview-out { max-height: 40vh; overflow: auto; margin-top: 10px; }
+ul.preview-list { padding-left: 16px; font-size: 12px; } ul.preview-list ul { padding-left: 18px; }
+ul.preview-list li.mono { word-break: break-all; }
+dialog { max-width: 640px; }
+.note-text { width: 100%; margin-top: 8px; font: inherit; font-size: 12px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
+button.star { font-size: 15px; line-height: 1; } button.star.on { color: #d29e00; border-color: #d29e00; }
+.nmark { color: #d29e00; }

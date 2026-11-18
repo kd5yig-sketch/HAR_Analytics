@@ -326,8 +326,40 @@ function buildRedacted(opts) {
     }
     if (opts.resBody && e._webSocketMessages) delete e._webSocketMessages;
   }
-  har.log.comment = ((har.log.comment ? har.log.comment + ' ' : '') + 'Redacted with HAR Analyzer on ' + new Date().toISOString() + '.').trim();
+  if (opts.pii) {
+    // Mask personal data in every value (never in names, methods, dates or MIME types).
+    const SKIP = new Set(['name', 'method', 'httpVersion', 'startedDateTime', 'mimeType', 'encoding', '_resourceType', 'serverIPAddress', 'connection', 'pageref', 'id', 'expires', 'comment', 'version', 'statusText', '_priority']);
+    for (const e of har.log.entries || []) for (const side of [e.request, e.response]) for (const x of (side && side.headers) || []) if (CLIENT_IP_HEADERS.test(String(x.name))) x.value = RED;
+    har.log.entries = JSON.parse(JSON.stringify(har.log.entries), function (k, v) {
+      if (typeof v !== 'string' || SKIP.has(k)) return v;
+      if (k === 'text' && this && this.encoding === 'base64') return v;
+      return maskPii(v);
+    });
+  }
+  har.log.comment = ((har.log.comment ? har.log.comment + ' ' : '') + 'Redacted with HAR Analytics on ' + new Date().toISOString() + '.').trim();
   return har;
+}
+// What the redacted copy changes, grouped for the preview: Map(label → {count, examples})
+function redactionDiff(orig, red) {
+  const groups = new Map(), add = (label, ex) => { if (!groups.has(label)) groups.set(label, { count: 0, examples: [] }); const g = groups.get(label); g.count++; if (g.examples.length < 6 && ex) g.examples.push(ex); };
+  const short = v => { v = String(v == null ? '' : v); return v.length > 90 ? v.slice(0, 90) + '…' : v; };
+  (orig.log.entries || []).forEach((a, i) => {
+    const b = (red.log.entries || [])[i]; if (!b) return;
+    const n = '#' + (i + 1);
+    if (a.request.url !== b.request.url) add('URLs (query parameters or personal data)', n + ' ' + short(b.request.url));
+    for (const [sa, sb, side] of [[a.request, b.request, 'Request'], [a.response, b.response, 'Response']]) {
+      (sa.headers || []).forEach((x, k) => { const y = (sb.headers || [])[k]; if (y && x.value !== y.value) add(side + ' header: ' + String(x.name).toLowerCase(), n + ' → ' + short(y.value)); });
+      if ((sa.cookies || []).some((c, k) => (sb.cookies || [])[k] && c.value !== sb.cookies[k].value)) add(side + ' cookies', n);
+    }
+    const pa = a.request.postData, pb = b.request.postData;
+    if (pa && pb && (pa.text !== pb.text || JSON.stringify(pa.params) !== JSON.stringify(pb.params))) add(pb.text === '' && pa.text ? 'Request bodies removed' : 'Request bodies (fields masked)', n);
+    const ca = a.response.content || {}, cb = b.response.content || {};
+    if (ca.text != null && cb.text == null) add('Response bodies removed', n);
+    else if (ca.text != null && ca.text !== cb.text) add('Response bodies (fields masked)', n);
+    if (a.response.redirectURL !== b.response.redirectURL) add('Redirect targets', n);
+  });
+  (orig.log.pages || []).forEach((p, i) => { const q = (red.log.pages || [])[i]; if (q && p.title !== q.title) add('Page titles', short(q.title)); });
+  return groups;
 }
 function csvCell(v) { v = v == null ? '' : String(v); return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
 
