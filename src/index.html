@@ -125,6 +125,9 @@
     <button id="x-bundle" class="primary" title="A .zip with the redacted HAR, the diagnosis and authentication reports, the request list, your notes and a README">Case bundle (.zip)</button>
   </div>
   <div id="x-preview-out"></div>
+  <h4 style="margin:14px 0 4px">Replay</h4>
+  <p style="margin:0"><button id="x-postman">Postman collection</button> <span class="muted" style="font-size:12px">of the requests currently shown in the Requests tab</span></p>
+  <label><input type="checkbox" id="x-pm-mask" checked> Replace credentials with collection variables ({{token}}, {{cookie}}…)</label>
   <p style="margin:12px 0 0"><button id="x-csv">Request list as CSV</button> <span class="muted" style="font-size:12px">(not redacted; for your own use)</span> <span class="muted" style="font-size:12px">· Notes in this file: <span id="x-notes-count">0</span></span></p>
 </dialog>
 <dialog id="dlg-decode" class="wide">

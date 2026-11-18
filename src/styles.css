@@ -280,3 +280,11 @@ dialog.wide { max-width: 980px; width: calc(100% - 32px); }
 .decres { margin-bottom: 10px; } .decres pre.body { max-height: 260px; overflow: auto; margin: 4px 0; }
 .ldiff { font-family: var(--mono); font-size: 12px; background: var(--panel-2); border-radius: 6px; padding: 6px; }
 .dl { white-space: pre-wrap; word-break: break-all; } .dl.add { background: color-mix(in srgb, var(--ok) 18%, transparent); } .dl.del { background: var(--err-soft); } .dl.skip { color: var(--muted); font-style: italic; }
+
+/* Copy-as menu and a tidier detail header */
+.dhead .top { flex-wrap: wrap; }
+.dhead button { white-space: nowrap; }
+.menuwrap { position: relative; display: inline-block; }
+.menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 10; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.18); padding: 4px; display: flex; flex-direction: column; min-width: 180px; }
+.menu button { border: none; text-align: left; border-radius: 6px; }
+.menu button:hover, .menu button:focus { background: var(--accent-soft); }

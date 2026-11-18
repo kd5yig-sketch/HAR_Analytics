@@ -10,7 +10,7 @@
   "scripts": {
     "build": "node tools/build.mjs",
     "check": "node tools/build.mjs --check",
-    "test": "npm run check && node test/smoke.mjs && node test/auth.mjs && node test/diagnose.mjs && node test/toolkit.mjs",
+    "test": "npm run check && node test/smoke.mjs && node test/auth.mjs && node test/diagnose.mjs && node test/toolkit.mjs && node test/copyas.mjs",
     "sample": "node test/make-sample.mjs && node test/make-auth-sample.mjs && node test/make-diag-samples.mjs"
   },
   "devDependencies": {

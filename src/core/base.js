@@ -250,21 +250,6 @@ function bodyText(content) {
   }
   return String(content.text);
 }
-function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'"; }
-function toCurl(e) {
-  const r = e.raw.request || {};
-  const parts = ['curl ' + shq(e.url)];
-  if (e.method !== 'GET' && !(e.method === 'POST' && r.postData)) parts.push('-X ' + e.method);
-  for (const x of (r.headers || [])) {
-    const n = String(x.name);
-    if (n.startsWith(':') || /^(content-length|host|connection|accept-encoding)$/i.test(n)) continue;
-    parts.push('-H ' + shq(n + ': ' + x.value));
-  }
-  if (r.postData && r.postData.text != null) parts.push('--data-raw ' + shq(r.postData.text));
-  else if (r.postData && Array.isArray(r.postData.params)) for (const p of r.postData.params) parts.push('--data-urlencode ' + shq(p.name + '=' + (p.value || '')));
-  parts.push('--compressed');
-  return parts.join(' \\\n  ');
-}
 /* ---------- export ---------- */
 const SENSITIVE_HEADER = /^(authorization|proxy-authorization|cookie|set-cookie|x-api-key|api-key|apikey|x-auth-token|x-access-token|x-refresh-token|x-id-token|x-csrf-token|x-xsrf-token|csrf-token|x-amz-security-token|x-goog-api-key|ocp-apim-subscription-key|x-functions-key|private-token|x-session-id|x-ms-token-aad-access-token)$/i;
 const SENSITIVE_NAME = /(token|secret|passw|pwd|auth|session|sessid|sig|signature|credential|apikey|api_key|api-key|ticket|assertion|saml|jwt|bearer)/i;

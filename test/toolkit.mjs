@@ -17,6 +17,7 @@ if (shots) mkdirSync(shots, { recursive: true });
 
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ acceptDownloads: true, viewport: { width: 1400, height: 1000 } });
+await ctx.grantPermissions(['clipboard-read', 'clipboard-write']);
 const page = await ctx.newPage();
 const errors = [], network = [];
 page.on('pageerror', e => errors.push('pageerror: ' + e.message));
@@ -250,6 +251,42 @@ await step('body tools: compare responses (JSON structure and headers)', async (
   await page.waitForFunction(() => /\$\.data/.test(document.querySelector('#diff-out').textContent));
   if (shots) await page.screenshot({ path: join(shots, 'diff.png') });
   await page.click('#diff-close');
+  await page.fill('#q', '');
+});
+
+await step('copy as: every format is offered and copies runnable code', async () => {
+  await open('auth-failures.har');
+  await selectRow('/v1/orders', 3);
+  await page.click('#btn-copy');
+  const formats = await page.$$eval('#copy-menu button', b => b.map(x => x.textContent));
+  assert.deepEqual(formats, ['URL', 'cURL (bash)', 'JavaScript fetch', 'PowerShell', 'Python requests', 'HTTPie', 'wget']);
+  const copied = {};
+  for (const f of ['url', 'curl', 'fetch', 'powershell', 'python', 'httpie', 'wget']) {
+    if (f !== 'url') await page.click('#btn-copy');
+    await page.click(`#copy-menu button[data-format="${f}"]`);
+    copied[f] = await page.evaluate(() => navigator.clipboard.readText());
+  }
+  assert.match(copied.url, /^https:\/\/api\.example\.com\/v1\/orders$/);
+  assert.match(copied.curl, /^curl 'https:\/\/api\.example\.com\/v1\/orders' \\\n  -H 'user-agent:/);
+  assert.match(copied.fetch, /await fetch\("https:\/\/api\.example\.com\/v1\/orders", \{\n  method: "GET"/);
+  assert.match(copied.powershell, /Invoke-WebRequest -Uri 'https:\/\/api\.example\.com\/v1\/orders'/);
+  assert.match(copied.python, /requests\.request\(\n    "GET",/);
+  assert.match(copied.httpie, /^http \\\n  GET \\\n  'https:/);
+  assert.match(copied.wget, /^wget --quiet --output-document=- --method=GET/);
+  assert.ok(!(await page.isVisible('#copy-menu')), 'menu closes after copying');
+});
+
+await step('copy as: Postman collection of the filtered requests, credentials as variables', async () => {
+  await page.click('#btn-export');
+  const ex = await download(() => page.click('#x-postman'));
+  assert.equal(ex.name, 'auth-failures.postman_collection.json');
+  const pm = JSON.parse(readFileSync(ex.path, 'utf8'));
+  assert.equal(pm.info.schema, 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json');
+  assert.equal(pm.item.length, 3, 'only the filtered requests');
+  const text = JSON.stringify(pm);
+  assert.ok(!/eyJ[\w-]+\.eyJ/.test(text), 'no live tokens in the collection');
+  assert.ok(pm.item.some(i => i.request.header.some(h => h.key.toLowerCase() === 'authorization' && h.value === 'Bearer {{token}}')));
+  assert.ok(pm.variable.some(v => v.key === 'token'));
   await page.fill('#q', '');
 });
 

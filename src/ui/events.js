@@ -73,3 +73,4 @@ let decT; $('#dec-in').addEventListener('input', () => { clearTimeout(decT); dec
 $('#dec-close').onclick = () => $('#dlg-decode').close();
 $('#diff-with').addEventListener('change', renderDiff);
 $('#diff-close').onclick = () => $('#dlg-diff').close();
+$('#x-postman').onclick = exportPostman;

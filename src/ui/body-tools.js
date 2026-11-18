@@ -106,3 +106,19 @@ function renderDiff() {
   }
   $('#diff-out').replaceChildren(...out);
 }
+
+/* ---------- copy as… menu ---------- */
+function copyMenu(e) {
+  const menu = h('div', { class: 'menu hidden', role: 'menu', id: 'copy-menu' }, COPY_FORMATS.map(([k, label, fn]) => h('button', { role: 'menuitem', 'data-format': k, text: label, onclick: () => { copyText(fn(e)); menu.classList.add('hidden'); } })));
+  const btn = h('button', { id: 'btn-copy', 'aria-haspopup': 'menu', title: 'Copy this request as a URL or as code: cURL, fetch, PowerShell, Python, HTTPie, wget', text: 'Copy as… ▾' });
+  btn.onclick = ev => { ev.stopPropagation(); menu.classList.toggle('hidden'); if (!menu.classList.contains('hidden')) menu.querySelector('button').focus(); };
+  menu.addEventListener('keydown', ev => { if (ev.key === 'Escape') { menu.classList.add('hidden'); btn.focus(); } });
+  return h('span', { class: 'menuwrap' }, btn, menu);
+}
+document.addEventListener('click', ev => { const m = document.getElementById('copy-menu'); if (m && !ev.target.closest('.menuwrap')) m.classList.add('hidden'); });
+function exportPostman() {
+  const list = S.filtered.length ? S.filtered : S.entries;
+  const pm = toPostman(list, S.fileName, $('#x-pm-mask').checked);
+  download(baseName() + '.postman_collection.json', JSON.stringify(pm, null, 2), 'application/json');
+  $('#dlg-export').close(); toast('Postman collection saved (' + list.length + ' requests)');
+}
