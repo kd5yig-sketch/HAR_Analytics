@@ -313,6 +313,37 @@ await step('timeline: insights, charts, and click-through filters', async () => 
   await page.fill('#q', '');
 });
 
+await step('sequence diagrams: failing step in red, click-through, SVG / PNG / Mermaid export', async () => {
+  await open('auth-failures.har');
+  await page.click('#tabs button[data-view="auth"]');
+  const card = page.locator('#view-auth .acard.flow', { hasText: 'PKCE code_verifier does not match' }).first();
+  await card.locator('.seq-toggle').click();
+  const svg = card.locator('svg.seq');
+  await svg.waitFor();
+  const labels = await svg.locator('text.prole').allTextContents();
+  assert.deepEqual(labels, ['Browser', 'Identity provider', 'App']);
+  const bad = await svg.locator('g.msg.bad text.mtext').allTextContents();
+  assert.ok(bad.some(t => /^400 Bad Request/.test(t)), 'failing token response drawn as bad: ' + bad.join(' | '));
+  assert.ok(await svg.locator('rect.note.bad').count() >= 1, 'failed check shown as a red note');
+  if (shots) await card.screenshot({ path: join(shots, 'sequence.png') });
+  const s = await download(() => card.locator('.seq-svg').click());
+  const xml = readFileSync(s.path, 'utf8');
+  assert.match(xml, /^<\?xml/); assert.match(xml, /<style>/); assert.match(xml, /PKCE code_verifier does not match/);
+  const p = await download(() => card.locator('.seq-png').click());
+  assert.deepEqual([...readFileSync(p.path).subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 'PNG signature');
+  await card.locator('.seq-mermaid').click();
+  const mm = await page.evaluate(() => navigator.clipboard.readText());
+  assert.match(mm, /^sequenceDiagram\n  autonumber\n  participant B as Browser/);
+  assert.match(mm, /P0--xB: 400 Bad Request/);
+  assert.match(mm, /Note over B,P\d: ✗ PKCE code_verifier does not match/);
+  await svg.locator('g.msg.bad').first().click();
+  await page.waitForSelector('#detail .dtabs button[data-tab="auth"].active');
+  assert.match(await page.textContent('#detail .dhead'), /#13/);
+  await page.click('#tabs button[data-view="auth"]');
+  const rep = await download(() => page.click('#auth-dl'));
+  assert.match(readFileSync(rep.path, 'utf8'), /```mermaid\nsequenceDiagram/);
+});
+
 await step('no network requests and no errors', async () => {
   assert.deepEqual(network, []);
   assert.deepEqual(errors, []);

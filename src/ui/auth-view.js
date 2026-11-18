@@ -23,10 +23,11 @@ function eventCard(v, inDetail) {
 }
 function stepLink(e) { return h('a', { href: '#', text: '#' + e.i, onclick: ev => { ev.preventDefault(); openRequest(e, 'auth'); } }); }
 function flowCard(f) {
-  const bad = f.checks.some(c => c.ok === false);
+  const bad = f.checks.some(c => c.ok === false), [dbtn, dbox] = diagramBlock(f);
   return h('div', { class: 'acard flow' + (bad ? ' fail' : '') },
     h('div', { class: 'ahead' }, h('span', { class: 'sev ' + (bad ? 'error' : 'info'), text: f.kind === 'saml' ? 'SAML' : f.kind === 'windows' ? 'Windows' : 'OAuth' }), h('b', { text: f.title }),
-      h('span', { class: 'muted', text: [f.idp, f.client_id ? 'client ' + f.client_id : ''].filter(Boolean).join(' · ') })),
+      h('span', { class: 'muted', text: [f.idp, f.client_id ? 'client ' + f.client_id : ''].filter(Boolean).join(' · ') }), h('span', { class: 'spacer' }), dbtn),
+    dbox,
     h('ol', { class: 'steps' }, f.steps.map(s => h('li', null, stepLink(s.e), ' ', s.label))),
     f.checks.length ? h('ul', { class: 'checks' }, f.checks.map(c => h('li', { class: c.ok === true ? 'ok' : c.ok === false ? 'bad' : 'info' },
       h('span', { class: 'ic', text: c.ok === true ? '✓' : c.ok === false ? '✗' : 'i' }), h('span', { text: c.label }), c.detail ? h('span', { class: 'muted', text: ' — ' + c.detail }) : null))) : null);

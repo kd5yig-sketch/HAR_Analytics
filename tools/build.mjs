@@ -10,7 +10,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 // Analysis modules first (they also run under Node in the CLI), then the UI.
 // Order matters only for top-level statements that use earlier declarations.
-export const CORE_FILES = ['core/base.js', 'core/xml.js', 'core/auth.js', 'core/diag.js', 'core/compare.js', 'core/bodytools.js', 'core/copyas.js', 'core/settings.js', 'core/rules.js', 'core/pii.js', 'core/stats.js', 'core/netlog.js', 'core/zip.js'];
+export const CORE_FILES = ['core/base.js', 'core/xml.js', 'core/auth.js', 'core/sequence.js', 'core/diag.js', 'core/compare.js', 'core/bodytools.js', 'core/copyas.js', 'core/settings.js', 'core/rules.js', 'core/pii.js', 'core/stats.js', 'core/netlog.js', 'core/zip.js'];
 export const UI_FILES = ['ui/dom.js', 'ui/app.js', 'ui/auth-view.js', 'ui/diag-view.js', 'ui/compare-view.js', 'ui/settings-view.js', 'ui/share-view.js', 'ui/body-tools.js', 'ui/timeline-view.js', 'ui/sequence.js', 'ui/netlog-view.js', 'ui/events.js'];
 
 const exists = f => { try { readFileSync(join(root, 'src', f)); return true; } catch (_) { return false; } };

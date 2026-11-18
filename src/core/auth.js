@@ -543,6 +543,10 @@ async function detectOAuth(byTime) {
     if (!back) { flow.checks.push({ ok: null, label: 'Did not return to the redirect_uri in this HAR', detail: 'The user may not have finished signing in, or the capture stopped early.' }); continue; }
     if (cb.code) secret(cb.code);
     flow.steps.push({ e: back, label: cb.error ? 'Identity provider sent the browser back with error "' + cb.error + '"' : 'Identity provider sent the browser back to the app' + (cb.code ? ' with an authorization code' : cb.id_token || cb.access_token ? ' with tokens' : '') });
+    if (noQuery(back.url) !== ru) {
+      const land = byTime.find(x => x !== back && x.start >= back.start && x.start - back.start < 120000 && noQuery(x.url) === ru);
+      if (land) flow.steps.push({ e: land, label: 'Browser lands on the app’s redirect_uri' + (land.status >= 400 || land.status === 0 ? ' (failed: ' + (land.status || 'no response') + ')' : '') });
+    }
     if (cb.error) {
       flow.checks.push({ ok: false, label: 'Identity provider returned error ' + cb.error, detail: cb.error_description || '' });
       flagEntry(back, 'OAuth sign-in', 'Sign-in error: ' + cb.error, oauthErrorCause(cb.error, cb.error_description, ''));
@@ -1040,7 +1044,7 @@ function authReport() {
       L.push('### ' + f.title + (f.idp ? ' (' + f.idp + ')' : '') + (f.client_id ? ', client ' + f.client_id : ''), '');
       for (const s of f.steps) L.push('1. #' + s.e.i + ' ' + s.label);
       for (const c of f.checks) L.push('- ' + (c.ok === true ? '✓' : c.ok === false ? '✗' : 'ℹ') + ' ' + c.label + (c.detail ? ' (' + c.detail.replace(/\n/g, ' ') + ')' : ''));
-      L.push('');
+      L.push('', '```mermaid', flowMermaid(f), '```', '');
     }
   }
   const toks = [...A.tokens.values()].filter(t => t.jwt && t.jwt.payload);
