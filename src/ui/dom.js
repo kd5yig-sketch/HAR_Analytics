@@ -48,3 +48,12 @@ async function stage(label) {
   await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
 }
 function stageDone() { const box = document.getElementById('loading'); if (box) box.classList.add('hidden'); }
+// Same for table rows: the "Show more" button sits in its own full-width row.
+function cappedRows(list, render, n, cols) {
+  const rows = list.slice(0, n).map(render);
+  if (list.length <= n) return rows;
+  const btn = h('button', { class: 'more-btn', text: 'Show ' + Math.min(n, list.length - n) + ' more (' + (list.length - n) + ' hidden)' });
+  const tr = h('tr', { class: 'more-row' }, h('td', { colspan: cols }, btn));
+  btn.onclick = () => tr.replaceWith(...cappedRows(list.slice(n), render, n, cols));
+  return [...rows, tr];
+}

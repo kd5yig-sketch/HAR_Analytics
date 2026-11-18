@@ -34,7 +34,7 @@ async function loadHar(har, name) {
   const dc = D.events.filter(v => !v.normal && v.sev !== 'info'), bd = $('#b-diag');
   bd.textContent = dc.length; bd.className = 'badge' + (dc.some(v => v.sev === 'error') ? ' err' : dc.length ? ' warn' : '');
   $('#btn-compare').disabled = false;
-  renderOverview(); renderFindings(); renderAuth(); renderDiag(); renderCompare(); applyFilters();
+  renderOverview(); renderFindings(); renderAuth(); renderDiag(); renderTimeline(); renderCompare(); applyFilters();
   stageDone();
   show('overview');
 }
@@ -196,7 +196,7 @@ function parseQuery(s) {
   return s.trim().split(/\s+/).filter(Boolean).map(tok => {
     let neg = false;
     if (tok.length > 1 && tok[0] === '-') { neg = true; tok = tok.slice(1); }
-    const m = /^(status|method|domain|host|type|mime|larger|slower|auth|diag|note):(.+)$/i.exec(tok);
+    const m = /^(status|method|domain|host|type|mime|larger|slower|auth|diag|note|time|endpoint):(.+)$/i.exec(tok);
     return m ? { neg, key: m[1].toLowerCase(), val: m[2].toLowerCase() } : { neg, key: null, val: tok.toLowerCase() };
   });
 }
@@ -225,6 +225,8 @@ function tokMatch(e, t, deep) {
     case 'mime': return e.mime.toLowerCase().includes(v);
     case 'larger': return e.transfer > parseSize(v);
     case 'slower': return e.time > parseDur(v);
+    case 'time': { const m = /^(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)$/.exec(v); return !!m && e.start >= +m[1] * 1000 && e.start < +m[2] * 1000; }
+    case 'endpoint': return S.epKeys.has(v) ? cmpKey(e) === S.epKeys.get(v) : false;
     case 'note': { const n = S.notes.get(e.i); return !!n && (v === 'starred' ? n.star : v === 'text' ? !!(n.text || '').trim() : n.star || !!(n.text || '').trim()); }
     case 'diag': return !!(e.diag && e.diag.some(x => !x.normal && (v === 'any' || x.cat === v || x.sev === v)));
     case 'auth': return v === 'fail' ? !!(e.auth && e.auth.event && !e.auth.event.normal) : !!(e.auth || e.oauthRole || e.saml);

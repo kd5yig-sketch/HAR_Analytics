@@ -178,3 +178,21 @@ for (const broken of [false, true]) {
   add({ at: 1200, url: SHOP + '/api/health', json: { status: 'ok', uptime: 123456789, build: '2026.11.02-1600' } });
   save('personal-data.har', { onContentLoad: 300, onLoad: 600 });
 }
+
+/* =================== timeline.har =================== */
+// Ten minutes of app traffic: latency climbs after minute 4, and from minute 6
+// most order requests fail with 503 — for the Timeline tab.
+{
+  const APP = 'https://app.example.com', API = 'https://api.example.com';
+  const { add, save } = builder(APP + '/', 'HAR Analytics timeline sample generator');
+  let seed = 7; const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  add({ at: 0, type: 'document', url: APP + '/', mime: 'text/html', body: '<title>App</title>' });
+  for (let s = 1; s < 600; s++) {
+    const t = s * 1000, slow = t > 240000 ? 1 + (t - 240000) / 40000 : 1;
+    const id = 1000 + Math.floor(rnd() * 500), failing = t >= 360000 && rnd() < 0.7;
+    add({ at: t, url: API + '/api/orders/' + id, req: [['origin', APP]], ...(failing ? { status: 503, statusText: 'Service Unavailable', json: { error: 'upstream unavailable' } } : { json: { id } }), timings: { wait: Math.round((70 + rnd() * 40) * slow), receive: 3 }, res: [['access-control-allow-origin', APP]] });
+    if (s % 10 === 0) add({ at: t + 300, url: API + '/api/health', req: [['origin', APP]], json: { ok: true }, timings: { wait: 20 }, res: [['access-control-allow-origin', APP]] });
+    if (s % 15 === 0) add({ at: t + 500, url: API + '/api/search?q=item' + s, req: [['origin', APP]], json: { results: [] }, timings: { wait: Math.round(300 * slow + rnd() * 200), receive: 10 }, res: [['access-control-allow-origin', APP]] });
+  }
+  save('timeline.har', { onContentLoad: 300, onLoad: 600 });
+}

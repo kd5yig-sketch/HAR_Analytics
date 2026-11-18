@@ -301,6 +301,28 @@ dialog.wide { max-width: 980px; width: calc(100% - 32px); }
 .menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 10; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.18); padding: 4px; display: flex; flex-direction: column; min-width: 180px; }
 .menu button { border: none; text-align: left; border-radius: 6px; }
 .menu button:hover, .menu button:focus { background: var(--accent-soft); }
+
+/* Timeline */
+.chartbox { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 8px; }
+svg.chart { width: 100%; height: 220px; display: block; }
+svg.chart .grid { stroke: var(--border); stroke-width: 1; vector-effect: non-scaling-stroke; }
+svg.chart .tick { fill: var(--muted); font-size: 11px; }
+svg.chart .hit { fill: transparent; }
+svg.chart .bucket { cursor: pointer; } svg.chart .bucket:hover .hit, svg.chart .bucket:focus .hit { fill: var(--accent-soft); } svg.chart .bucket:focus { outline: none; }
+.bar-ok, .lg-ok { fill: var(--accent); background: var(--accent); } .bar-4xx, .lg-4xx { fill: var(--warn); background: var(--warn); }
+.bar-5xx, .lg-5xx { fill: var(--err); background: var(--err); } .bar-failed, .lg-failed { fill: #7a1f1f; background: #7a1f1f; }
+.line-p50, .line-p95 { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; } .line-p50 { stroke: var(--accent); } .line-p95 { stroke: var(--warn); stroke-dasharray: 4 3; }
+circle.dotc.line-p50 { fill: var(--accent); stroke: none; } circle.dotc.line-p95 { fill: var(--warn); stroke: none; }
+.lg-p50 { background: var(--accent); } .lg-p95 { background: var(--warn); }
+ul.insights { margin: 6px 0 0; padding-left: 18px; } ul.insights li { margin: 3px 0; } li.ins-errors, li.ins-failing { color: var(--err); } li.ins-errors a { color: inherit; }
+.tscroll { overflow-x: auto; } table.eps td.url { white-space: normal; word-break: break-all; } tr.bad-row td { background: var(--err-soft); }
+th.sortable { cursor: pointer; user-select: none; } th.sorted { color: var(--text); font-weight: 600; }
+.more-row td { border-bottom: none; }
+
+/* Compact header so all tabs fit on one line at common widths */
+header { gap: 10px; padding: 6px 12px; }
+nav.tabs button { padding: 6px 9px; }
+header > button { padding: 4px 9px; }
 </style>
 </head>
 <body>
@@ -311,6 +333,7 @@ dialog.wide { max-width: 980px; width: calc(100% - 32px); }
     <button data-view="requests" disabled>Requests <span class="badge" id="b-req">0</span></button>
     <button data-view="findings" disabled>Findings <span class="badge" id="b-find">0</span></button>
     <button data-view="diag" disabled>Diagnose <span class="badge" id="b-diag">0</span></button>
+    <button data-view="timeline" disabled>Timeline</button>
     <button data-view="auth" disabled>Authentication <span class="badge" id="b-auth">0</span></button>
     <button data-view="compare" disabled>Compare</button>
   </nav>
@@ -391,6 +414,8 @@ dialog.wide { max-width: 980px; width: calc(100% - 32px); }
   <section class="view hidden" id="view-diag"></section>
 
   <section class="view hidden" id="view-compare"></section>
+
+  <section class="view hidden" id="view-timeline"></section>
 
   <section class="view hidden" id="view-settings"></section>
 </main>
@@ -3209,6 +3234,63 @@ function diagPii() {
     [...byKind].map(([k, v]) => PII_KINDS[k].label + ': ' + v.count + ' (e.g. ' + [...v.samples].join(', ') + ')'), list);
 }
 
+// ---- src/core/stats.js ----
+/* ---------- statistics over time and per endpoint ---------- */
+function percentile(sorted, p) { if (!sorted.length) return NaN; const k = (sorted.length - 1) * p, lo = Math.floor(k), hi = Math.ceil(k); return sorted[lo] + (sorted[hi] - sorted[lo]) * (k - lo); }
+const NICE_STEPS = [100, 250, 500, 1000, 2000, 5000, 10000, 15000, 30000, 60000, 120000, 300000, 600000, 900000, 1800000, 3600000, 7200000, 21600000, 43200000, 86400000];
+const outcomeOf = e => e.status === 0 ? 'failed' : e.status >= 500 ? '5xx' : e.status >= 400 ? '4xx' : 'ok';
+// Buckets of equal duration covering the capture; each with counts by outcome, bytes and latency percentiles.
+function timeBuckets(entries, target = 60) {
+  const list = entries.filter(e => !isPending(e));
+  const span = Math.max(1, list.reduce((a, e) => Math.max(a, e.start + e.time), 0));
+  const step = NICE_STEPS.find(s => span / s <= target) || NICE_STEPS[NICE_STEPS.length - 1];
+  const n = Math.max(1, Math.ceil(span / step));
+  const B = Array.from({ length: n }, (_, k) => ({ from: k * step, to: (k + 1) * step, n: 0, ok: 0, '4xx': 0, '5xx': 0, failed: 0, bytes: 0, times: [] }));
+  for (const e of list) { const b = B[Math.min(n - 1, Math.floor(e.start / step))]; b.n++; b[outcomeOf(e)]++; b.bytes += e.transfer; b.times.push(e.time); }
+  for (const b of B) { b.times.sort((x, y) => x - y); b.p50 = percentile(b.times, 0.5); b.p95 = percentile(b.times, 0.95); b.errors = b['4xx'] + b['5xx'] + b.failed; delete b.times; }
+  return { step, span, buckets: B };
+}
+function endpointStats(entries) {
+  const m = new Map();
+  for (const e of entries) {
+    if (isPending(e)) continue;
+    const k = cmpKey(e);
+    if (!m.has(k)) m.set(k, { key: k, entries: [], times: [], bytes: 0, errors: 0, statuses: new Map() });
+    const s = m.get(k); s.entries.push(e); s.times.push(e.time); s.bytes += e.transfer; if (isFail(e)) s.errors++; s.statuses.set(e.status, (s.statuses.get(e.status) || 0) + 1);
+  }
+  return [...m.values()].map(s => { s.times.sort((a, b) => a - b); return { key: s.key, entries: s.entries, count: s.entries.length, errors: s.errors, errorRate: s.errors / s.entries.length, p50: percentile(s.times, 0.5), p95: percentile(s.times, 0.95), max: s.times[s.times.length - 1], avgBytes: s.bytes / s.entries.length, statuses: [...s.statuses].sort((a, b) => b[1] - a[1]) }; });
+}
+// Plain-language observations about how the capture changed over time.
+function timelineInsights(entries) {
+  const out = [], list = entries.filter(e => !isPending(e)).sort((a, b) => a.start - b.start);
+  if (list.length < 10) return out;
+  const clock = ms => new Date(S.base + ms).toISOString().slice(11, 19);
+  const rel = ms => '+' + (ms >= 60000 ? Math.floor(ms / 60000) + ':' + String(Math.floor(ms / 1000) % 60).padStart(2, '0') : (ms / 1000).toFixed(1) + ' s');
+  // Error onset: the split point that best separates a low error rate before from a high one after.
+  const fails = list.map(isFail), total = fails.filter(Boolean).length;
+  if (total >= 3) {
+    let best = null, before = 0;
+    for (let k = 5; k < list.length - 3; k++) {
+      before += fails[k - 1] ? 1 : 0;
+      const rb = before / k, ra = (total - before) / (list.length - k);
+      if (ra - rb >= 0.3 && (!best || ra - rb > best.gain)) best = { k, rb, ra, gain: ra - rb };
+    }
+    if (best) out.push({ kind: 'errors', at: list[best.k].start, text: 'Errors start at ' + rel(list[best.k].start) + ' (' + clock(list[best.k].start) + ' UTC): ' + Math.round(best.rb * 100) + '% of requests failed before, ' + Math.round(best.ra * 100) + '% after.' });
+  }
+  const third = Math.floor(list.length / 3), med = arr => percentile(arr.map(e => e.time).sort((a, b) => a - b), 0.5);
+  const a = med(list.slice(0, third)), b = med(list.slice(-third));
+  if (b > a * 2 && b - a > 200) out.push({ kind: 'latency', text: 'Requests got slower: median ' + fmtMs(a) + ' in the first third of the capture, ' + fmtMs(b) + ' in the last third.' });
+  else if (a > b * 2 && a - b > 200) out.push({ kind: 'latency', text: 'Requests got faster: median ' + fmtMs(a) + ' in the first third, ' + fmtMs(b) + ' in the last third (warm caches or less load).' });
+  const tb = timeBuckets(list, 60), peak = tb.buckets.reduce((x, y) => (y.n > x.n ? y : x), tb.buckets[0]);
+  const medN = percentile(tb.buckets.map(x => x.n).sort((x, y) => x - y), 0.5);
+  if (peak && peak.n >= 5 && peak.n > 2 * medN) out.push({ kind: 'peak', at: peak.from, text: 'Busiest moment: ' + peak.n + ' requests between ' + rel(peak.from) + ' and ' + rel(peak.to) + '.' });
+  const eps = endpointStats(list).filter(s => s.count >= 3).sort((x, y) => y.p95 - x.p95);
+  if (eps[0] && eps[0].p95 > 1000) out.push({ kind: 'slowest', text: 'Slowest endpoint (95th percentile): ' + eps[0].key + ' — ' + fmtMs(eps[0].p95) + ' over ' + eps[0].count + ' requests.' });
+  const worst = endpointStats(list).filter(s => s.count >= 3 && s.errorRate >= 0.5).sort((x, y) => y.errors - x.errors);
+  if (worst[0]) out.push({ kind: 'failing', text: 'Most failing endpoint: ' + worst[0].key + ' — ' + worst[0].errors + ' of ' + worst[0].count + ' failed (' + worst[0].statuses.map(([s, c]) => (s || 'failed') + ' ×' + c).join(', ') + ').' });
+  return out;
+}
+
 // ---- src/core/zip.js ----
 /* ---------- zip writer ----------
    Builds a standard .zip in memory (deflate via CompressionStream when the
@@ -3298,6 +3380,15 @@ async function stage(label) {
   await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
 }
 function stageDone() { const box = document.getElementById('loading'); if (box) box.classList.add('hidden'); }
+// Same for table rows: the "Show more" button sits in its own full-width row.
+function cappedRows(list, render, n, cols) {
+  const rows = list.slice(0, n).map(render);
+  if (list.length <= n) return rows;
+  const btn = h('button', { class: 'more-btn', text: 'Show ' + Math.min(n, list.length - n) + ' more (' + (list.length - n) + ' hidden)' });
+  const tr = h('tr', { class: 'more-row' }, h('td', { colspan: cols }, btn));
+  btn.onclick = () => tr.replaceWith(...cappedRows(list.slice(n), render, n, cols));
+  return [...rows, tr];
+}
 
 // ---- src/ui/app.js ----
 async function loadText(text, name) {
@@ -3336,7 +3427,7 @@ async function loadHar(har, name) {
   const dc = D.events.filter(v => !v.normal && v.sev !== 'info'), bd = $('#b-diag');
   bd.textContent = dc.length; bd.className = 'badge' + (dc.some(v => v.sev === 'error') ? ' err' : dc.length ? ' warn' : '');
   $('#btn-compare').disabled = false;
-  renderOverview(); renderFindings(); renderAuth(); renderDiag(); renderCompare(); applyFilters();
+  renderOverview(); renderFindings(); renderAuth(); renderDiag(); renderTimeline(); renderCompare(); applyFilters();
   stageDone();
   show('overview');
 }
@@ -3498,7 +3589,7 @@ function parseQuery(s) {
   return s.trim().split(/\s+/).filter(Boolean).map(tok => {
     let neg = false;
     if (tok.length > 1 && tok[0] === '-') { neg = true; tok = tok.slice(1); }
-    const m = /^(status|method|domain|host|type|mime|larger|slower|auth|diag|note):(.+)$/i.exec(tok);
+    const m = /^(status|method|domain|host|type|mime|larger|slower|auth|diag|note|time|endpoint):(.+)$/i.exec(tok);
     return m ? { neg, key: m[1].toLowerCase(), val: m[2].toLowerCase() } : { neg, key: null, val: tok.toLowerCase() };
   });
 }
@@ -3527,6 +3618,8 @@ function tokMatch(e, t, deep) {
     case 'mime': return e.mime.toLowerCase().includes(v);
     case 'larger': return e.transfer > parseSize(v);
     case 'slower': return e.time > parseDur(v);
+    case 'time': { const m = /^(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)$/.exec(v); return !!m && e.start >= +m[1] * 1000 && e.start < +m[2] * 1000; }
+    case 'endpoint': return S.epKeys.has(v) ? cmpKey(e) === S.epKeys.get(v) : false;
     case 'note': { const n = S.notes.get(e.i); return !!n && (v === 'starred' ? n.star : v === 'text' ? !!(n.text || '').trim() : n.star || !!(n.text || '').trim()); }
     case 'diag': return !!(e.diag && e.diag.some(x => !x.normal && (v === 'any' || x.cat === v || x.sev === v)));
     case 'auth': return v === 'fail' ? !!(e.auth && e.auth.event && !e.auth.event.normal) : !!(e.auth || e.oauthRole || e.saml);
@@ -4305,7 +4398,7 @@ function renderDiff() {
   else if (jsonA && jsonB) {
     const d = diffJson(ja, jb), fmt = v => v === undefined ? '' : JSON.stringify(v).slice(0, 300);
     out.push(...sec('Response body (JSON, ' + (d.length ? d.length + ' difference' + (d.length > 1 ? 's' : '') : 'identical') + ')', [d.length ? h('table', { class: 'simple cmp jdiff' }, h('colgroup', null, h('col', { style: { width: '34%' } }), h('col'), h('col')), h('thead', null, h('tr', null, h('th', { text: 'Path' }), h('th', { text: '#' + a.i }), h('th', { text: '#' + b.i }))),
-      h('tbody', null, capped(d, x => h('tr', { class: x.kind === 'added' ? 'better' : x.kind === 'removed' ? 'worse' : 'diff' }, h('td', { class: 'mono', text: x.path + (x.kind !== 'changed' ? ' (' + x.kind + ')' : '') }), h('td', { class: 'mono', text: fmt(x.a) }), h('td', { class: 'mono', text: fmt(x.b) })), 200))) : h('p', { class: 'note', text: 'The JSON bodies are identical.' })]));
+      h('tbody', null, cappedRows(d, x => h('tr', { class: x.kind === 'added' ? 'better' : x.kind === 'removed' ? 'worse' : 'diff' }, h('td', { class: 'mono', text: x.path + (x.kind !== 'changed' ? ' (' + x.kind + ')' : '') }), h('td', { class: 'mono', text: fmt(x.a) }), h('td', { class: 'mono', text: fmt(x.b) })), 200, 3))) : h('p', { class: 'note', text: 'The JSON bodies are identical.' })]));
   } else {
     const d = diffLines(prettyBody(bodyA, a.mime).out, prettyBody(bodyB, b.mime).out), changed = d.filter(x => x.op !== ' ').length;
     const rows = []; let run = 0;
@@ -4335,6 +4428,88 @@ function exportPostman() {
   const pm = toPostman(list, S.fileName, $('#x-pm-mask').checked);
   download(baseName() + '.postman_collection.json', JSON.stringify(pm, null, 2), 'application/json');
   $('#dlg-export').close(); toast('Postman collection saved (' + list.length + ' requests)');
+}
+
+// ---- src/ui/timeline-view.js ----
+/* ---------- Timeline view: charts over time and per-endpoint statistics ---------- */
+const SVGNS = 'http://www.w3.org/2000/svg';
+function sv(tag, attrs, ...kids) {
+  const el = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) if (v != null) el.setAttribute(k, v);
+  for (const c of kids.flat()) if (c != null) el.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  return el;
+}
+S.epKeys = new Map();
+const relLabel = ms => ms >= 3600000 ? Math.floor(ms / 3600000) + 'h' + String(Math.floor(ms / 60000) % 60).padStart(2, '0') : ms >= 60000 ? Math.floor(ms / 60000) + ':' + String(Math.floor(ms / 1000) % 60).padStart(2, '0') : (ms / 1000).toFixed(ms < 10000 && ms % 1000 ? 1 : 0) + 's';
+function niceMax(v) { if (!(v > 0)) return 1; const p = Math.pow(10, Math.floor(Math.log10(v))); for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p; return 10 * p; }
+function chartFrame(tb, yMax, yFmt, height, title) {
+  const W = 1000, H = height, L = 56, R = 12, T = 12, Bm = 28, n = tb.buckets.length, bw = (W - L - R) / n;
+  const x = k => L + k * bw, y = v => T + (H - T - Bm) * (1 - v / yMax);
+  const g = sv('g', { class: 'axes' });
+  for (let k = 0; k <= 4; k++) { const v = yMax * k / 4; g.append(sv('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), class: 'grid' }), sv('text', { x: L - 6, y: y(v) + 4, 'text-anchor': 'end', class: 'tick' }, yFmt(v))); }
+  const every = Math.max(1, Math.ceil(n / 10));
+  for (let k = 0; k <= n; k += every) g.append(sv('text', { x: x(k), y: H - 8, 'text-anchor': k === 0 ? 'start' : 'middle', class: 'tick' }, '+' + relLabel(k * tb.step)));
+  const svg = sv('svg', { viewBox: '0 0 ' + W + ' ' + H, class: 'chart', role: 'img', 'aria-label': title, preserveAspectRatio: 'none' }, sv('title', null, title), g);
+  return { svg, x, y, bw, W, H, L, R, T, Bm };
+}
+function requestsChart(tb) {
+  const max = niceMax(Math.max(...tb.buckets.map(b => b.n))), f = chartFrame(tb, max, v => String(Math.round(v)), 220, 'Requests over time by outcome');
+  tb.buckets.forEach((b, k) => {
+    let acc = 0; const g = sv('g', { class: 'bucket', 'data-k': k, tabindex: '0', role: 'button', 'aria-label': b.n + ' requests from +' + relLabel(b.from) + ' to +' + relLabel(b.to) });
+    g.append(sv('title', null, '+' + relLabel(b.from) + ' – +' + relLabel(b.to) + ': ' + b.n + ' requests (' + b.ok + ' OK, ' + b['4xx'] + ' 4xx, ' + b['5xx'] + ' 5xx, ' + b.failed + ' failed). Click to list them.'));
+    g.append(sv('rect', { x: f.x(k), y: f.T, width: f.bw, height: f.H - f.T - f.Bm, class: 'hit' }));
+    for (const o of ['ok', '4xx', '5xx', 'failed']) { if (!b[o]) continue; const y0 = f.y(acc), y1 = f.y(acc + b[o]); g.append(sv('rect', { x: f.x(k) + 0.5, y: y1, width: Math.max(1, f.bw - 1), height: Math.max(0.5, y0 - y1), class: 'bar-' + o })); acc += b[o]; }
+    const go = () => filterTime(b.from, b.to);
+    g.addEventListener('click', go); g.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); go(); } });
+    f.svg.append(g);
+  });
+  return f.svg;
+}
+function latencyChart(tb) {
+  const vals = tb.buckets.flatMap(b => [b.p95].filter(v => v >= 0)), max = niceMax(Math.max(1, ...vals)), f = chartFrame(tb, max, v => fmtMs(v), 200, 'Latency over time: median and 95th percentile');
+  for (const [key, cls] of [['p95', 'line-p95'], ['p50', 'line-p50']]) {
+    const pts = tb.buckets.map((b, k) => b.n ? [f.x(k) + f.bw / 2, f.y(b[key])] : null);
+    let d = ''; pts.forEach((p, k) => { if (!p) return; d += (d && pts[k - 1] ? ' L' : ' M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1); });
+    if (d) f.svg.append(sv('path', { d: d.trim(), class: cls }));
+    pts.forEach((p, k) => { if (p) f.svg.append(sv('circle', { cx: p[0], cy: p[1], r: 2.5, class: cls + ' dotc' }, sv('title', null, key + ' ' + fmtMs(tb.buckets[k][key]) + ' at +' + relLabel(tb.buckets[k].from) + ' (' + tb.buckets[k].n + ' requests)'))); });
+  }
+  return f.svg;
+}
+function filterTime(from, to) {
+  resetFilters();
+  $('#q').value = 'time:' + (from / 1000).toFixed(1) + '-' + (to / 1000).toFixed(1);
+  applyFilters(); show('requests');
+}
+function filterEndpoint(key) {
+  const id = shortHash(key).slice(0, 8); S.epKeys.set(id, key);
+  resetFilters(); $('#q').value = 'endpoint:' + id; applyFilters(); show('requests');
+}
+S.epSort = { key: 'count', dir: -1 };
+function renderTimeline() {
+  const root = $('#view-timeline');
+  if (!S.entries.length) { root.replaceChildren(); return; }
+  const tb = timeBuckets(S.entries), ins = timelineInsights(S.entries), eps = endpointStats(S.entries);
+  const sorted = [...eps].sort((a, b) => { const k = S.epSort.key, x = a[k], y = b[k]; return (typeof x === 'string' ? x.localeCompare(y) : (x > y) - (x < y)) * S.epSort.dir || b.count - a.count; });
+  const th = (k, l, num) => h('th', { class: (num ? 'num ' : '') + 'sortable' + (S.epSort.key === k ? ' sorted' : ''), 'data-k': k, onclick: () => { S.epSort = { key: k, dir: S.epSort.key === k ? -S.epSort.dir : (k === 'key' ? 1 : -1) }; renderTimeline(); } }, l + (S.epSort.key === k ? (S.epSort.dir > 0 ? ' ▲' : ' ▼') : ''));
+  root.replaceChildren(h('div', { class: 'av' },
+    h('div', { class: 'verdict' }, h('div', { class: 'vt', text: 'Timeline' }),
+      h('p', { text: S.entries.length + ' requests over ' + fmtMs(tb.span) + ', starting ' + fmtDate(S.base) + '. Each bar is ' + fmtMs(tb.step) + '; click one to list its requests.' }),
+      ins.length ? h('ul', { class: 'insights' }, ins.map(i => h('li', { class: 'ins-' + i.kind }, i.at != null ? h('a', { href: '#', onclick: ev => { ev.preventDefault(); filterTime(i.at, i.at + tb.step); }, text: i.text }) : i.text))) : h('p', { class: 'muted', text: 'No notable changes over time.' })),
+    h('h3', { text: 'Requests over time' }),
+    h('div', { class: 'legend' }, [['ok', 'OK (1xx–3xx)'], ['4xx', '4xx'], ['5xx', '5xx'], ['failed', 'failed / no response']].map(([k, l]) => h('span', null, h('i', { class: 'lg-' + k }), l))),
+    h('div', { class: 'chartbox' }, requestsChart(tb)),
+    h('h3', { text: 'Latency over time' }),
+    h('div', { class: 'legend' }, h('span', null, h('i', { class: 'lg-p50' }), 'median (p50)'), h('span', null, h('i', { class: 'lg-p95' }), '95th percentile (p95)')),
+    h('div', { class: 'chartbox' }, latencyChart(tb)),
+    h('h3', { text: 'Endpoints (' + eps.length + ')' }),
+    h('p', { class: 'note', text: 'IDs, UUIDs and hashes in paths are grouped (shown as :n, :uuid, :hash). Click a row to list its requests.' }),
+    h('div', { class: 'tscroll' }, h('table', { class: 'simple eps' },
+      h('colgroup', null, h('col'), ...['80px', '110px', '80px', '80px', '80px', '90px'].map(w => h('col', { style: { width: w } }))),
+      h('thead', null, h('tr', null, th('key', 'Endpoint'), th('count', 'Requests', 1), th('errorRate', 'Errors', 1), th('p50', 'p50', 1), th('p95', 'p95', 1), th('max', 'Max', 1), th('avgBytes', 'Avg size', 1))),
+      h('tbody', null, cappedRows(sorted, s => h('tr', { class: 'click' + (s.errorRate >= 0.5 ? ' bad-row' : ''), onclick: () => filterEndpoint(s.key), title: 'Statuses: ' + s.statuses.map(([st, c]) => (st || 'failed') + ' ×' + c).join(', ') },
+        h('td', { class: 'url', text: s.key }), h('td', { class: 'num', text: String(s.count) }),
+        h('td', { class: 'num', text: s.errors ? s.errors + ' (' + Math.round(s.errorRate * 100) + '%)' : '0' }),
+        h('td', { class: 'num', text: fmtMs(s.p50) }), h('td', { class: 'num', text: fmtMs(s.p95) }), h('td', { class: 'num', text: fmtMs(s.max) }), h('td', { class: 'num', text: fmtBytes(Math.round(s.avgBytes)) })), 100, 7))))));
 }
 
 // ---- src/ui/events.js ----

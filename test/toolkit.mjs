@@ -290,6 +290,29 @@ await step('copy as: Postman collection of the filtered requests, credentials as
   await page.fill('#q', '');
 });
 
+await step('timeline: insights, charts, and click-through filters', async () => {
+  await open('timeline.har');
+  await page.click('#tabs button[data-view="timeline"]');
+  const ins = await page.textContent('#view-timeline ul.insights');
+  assert.match(ins, /Errors start at \+6:0\d .*0% of requests failed before, \d+% after/);
+  assert.match(ins, /Requests got slower: median \d+ ms in the first third of the capture, \d+ ms in the last third/);
+  const bars = await page.$$('#view-timeline svg.chart g.bucket');
+  assert.ok(bars.length >= 20 && bars.length <= 100, 'bucket count ' + bars.length);
+  assert.ok(await page.$('#view-timeline .line-p95'), 'p95 line drawn');
+  const rows = await page.$$eval('#view-timeline table.eps tbody tr', r => r.map(x => x.textContent));
+  assert.match(rows[0], /GET api\.example\.com\/api\/orders\/:n599\d+ \(\d+%\)/);
+  if (shots) await page.screenshot({ path: join(shots, 'timeline.png'), fullPage: true });
+  await page.click('#view-timeline table.eps tbody tr');
+  await page.waitForFunction(() => /^599 of 698/.test(document.querySelector('#count').textContent));
+  await page.click('#tabs button[data-view="timeline"]');
+  await bars[bars.length - 1].click();
+  await page.waitForFunction(() => /^time:\d/.test(document.querySelector('#q').value) && /^\d+ of 698/.test(document.querySelector('#count').textContent));
+  await page.click('#tabs button[data-view="timeline"]');
+  await page.click('#view-timeline ul.insights li.ins-errors a');
+  await page.waitForFunction(() => /^time:36\d/.test(document.querySelector('#q').value));
+  await page.fill('#q', '');
+});
+
 await step('no network requests and no errors', async () => {
   assert.deepEqual(network, []);
   assert.deepEqual(errors, []);

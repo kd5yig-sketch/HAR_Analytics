@@ -91,7 +91,7 @@ function renderDiff() {
   else if (jsonA && jsonB) {
     const d = diffJson(ja, jb), fmt = v => v === undefined ? '' : JSON.stringify(v).slice(0, 300);
     out.push(...sec('Response body (JSON, ' + (d.length ? d.length + ' difference' + (d.length > 1 ? 's' : '') : 'identical') + ')', [d.length ? h('table', { class: 'simple cmp jdiff' }, h('colgroup', null, h('col', { style: { width: '34%' } }), h('col'), h('col')), h('thead', null, h('tr', null, h('th', { text: 'Path' }), h('th', { text: '#' + a.i }), h('th', { text: '#' + b.i }))),
-      h('tbody', null, capped(d, x => h('tr', { class: x.kind === 'added' ? 'better' : x.kind === 'removed' ? 'worse' : 'diff' }, h('td', { class: 'mono', text: x.path + (x.kind !== 'changed' ? ' (' + x.kind + ')' : '') }), h('td', { class: 'mono', text: fmt(x.a) }), h('td', { class: 'mono', text: fmt(x.b) })), 200))) : h('p', { class: 'note', text: 'The JSON bodies are identical.' })]));
+      h('tbody', null, cappedRows(d, x => h('tr', { class: x.kind === 'added' ? 'better' : x.kind === 'removed' ? 'worse' : 'diff' }, h('td', { class: 'mono', text: x.path + (x.kind !== 'changed' ? ' (' + x.kind + ')' : '') }), h('td', { class: 'mono', text: fmt(x.a) }), h('td', { class: 'mono', text: fmt(x.b) })), 200, 3))) : h('p', { class: 'note', text: 'The JSON bodies are identical.' })]));
   } else {
     const d = diffLines(prettyBody(bodyA, a.mime).out, prettyBody(bodyB, b.mime).out), changed = d.filter(x => x.op !== ' ').length;
     const rows = []; let run = 0;
