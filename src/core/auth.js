@@ -334,7 +334,7 @@ function errorInfo(e) {
     if (ad) out.detail = ad[1].trim();
   }
   if (/html/i.test(e.mime) || /^\s*<(!doctype|html)/i.test(t)) {
-    const title = /<title[^>]*>([^<]{1,200})<\/title>/i.exec(t); if (title) out.title = title[1].trim();
+    const title = /<title[^>]*>([^<]{1,200})<\/title>/i.exec(t); if (title) out.title = htmlDecode(title[1]);
     out.loginForm = /<input[^>]+type\s*=\s*["']?password/i.test(t);
     out.html = true;
   }
@@ -858,15 +858,43 @@ function findRetry(e) {
   const u = noQuery(e.url);
   return sameUrl(e).find(x => x !== e && x.start > e.start && x.start - e.start < 300000 && x.method === e.method && noQuery(x.url) === u);
 }
+// A POST that submits a sign-in form (or JSON) with a password field.
+function formLogin(e) {
+  const pd = e.method === 'POST' && (e.raw.request || {}).postData;
+  if (!pd) return null;
+  let f = {};
+  if (Array.isArray(pd.params) && pd.params.length) for (const p of pd.params) f[p.name] = p.value;
+  else if (pd.text) {
+    const t = String(pd.text).slice(0, 20000);
+    if (/^\s*\{/.test(t)) { try { const j = JSON.parse(t); if (j && typeof j === 'object') f = j; } catch (_) { /* not JSON */ } }
+    else if (/^[^=&\s]+=/.test(t)) { try { for (const [k, v] of new URLSearchParams(t)) f[k] = v; } catch (_) { /* not a form */ } }
+  }
+  const keys = Object.keys(f), pw = keys.find(k => /^(password|passwd|pwd|pass)$|\[(password|passwd|pwd)\]$/i.test(k));
+  if (!pw) return null;
+  const user = keys.find(k => /^(login|user(_?name)?|email|account|identifier)$|\[(login|user(_?name)?|email)\]$/i.test(k));
+  const csrf = keys.find(k => /^(authenticity_token|_token|_?csrf(_?token)?|csrfmiddlewaretoken|__requestverificationtoken|_?xsrf(_?token)?)$/i.test(k));
+  return { pwEmpty: !f[pw], user: user && typeof f[user] === 'string' ? f[user] : '', csrf };
+}
+function formLoginCauses(e, fl, st, msg, add) {
+  const req = e.raw.request || {}, cookieSent = !!hdr(req.headers, 'cookie') || (req.cookies || []).length > 0;
+  if (fl.pwEmpty) add('high', 'form_empty_password', 'The form was submitted with an empty password', 'The password field is in the request but has no value.', ['Check the sign-in form, password manager or script that fills it in.']);
+  if (st === 429) add('high', 'login_throttled', 'Too many sign-in attempts', 'The server is throttling sign-in for this account or IP address.', ['Wait for the lockout to expire (see Retry-After), or unlock the account.']);
+  if (fl.csrf && (st === 422 || st === 419 || st === 400 || st === 403) && !/(invalid|incorrect|wrong|bad)\W+(user ?(name)?|password|credentials?|login)/i.test(msg)) {
+    if (!cookieSent) add('high', 'csrf_no_cookie', 'The form’s CSRF token was rejected because no session cookie was sent', 'The form carried ' + fl.csrf + ', but the request had no cookies. The token is only valid together with the session cookie set when the sign-in page loaded, so the cookie was not stored (blocked cookies, SameSite, an incognito or different browser profile) or not sent.', ['Check that the sign-in page’s Set-Cookie was stored and is sent with the form POST.', 'Allow cookies for this site.']);
+    else add('likely', 'csrf', 'The form’s CSRF token (' + fl.csrf + ') was rejected', 'HTTP ' + st + ' on a sign-in form that carries ' + fl.csrf + ' usually means the token did not match the session: the sign-in page was open too long, was served from a cache or another tab, or the session cookie changed between loading the page and submitting it.', ['Reload the sign-in page and submit again.', 'Make sure the sign-in page is not cached and that its session cookie reaches the form POST.']);
+  }
+  if (st === 200) add('likely', 'form_bad_password', 'The sign-in page came back: the credentials were not accepted', 'After the form was posted, the server answered with the sign-in page again (a page with a password field) instead of redirecting into the app. Usually the user name or password is wrong, the account is locked or disabled, or a second factor is required.', ['Look for the error message on that page (Response tab).', 'Check the account status and password.']);
+}
 function classifyAuth(e) {
   const req = e.raw.request || {}, a = e.auth || { creds: [], ch: [], pch: [] };
   if (!e.auth) e.auth = a;
   if (e.method === 'OPTIONS' && hdr(req.headers, 'access-control-request-method') && e.status !== 401) return null;
+  if (e.status === 401 && a.ch.length && a.ch.every(c => /^PrivateToken$/i.test(c.scheme))) return null; // Privacy Pass bot check, answered by the browser itself
   const sent = a.creds.filter(c => !c.proxy), st = e.status, causes = [], evidence = [];
   const add = (conf, id, title, detail, fixes) => { if (!causes.some(c => c.id === id)) causes.push({ conf, id, title, detail: detail || '', fixes: fixes || [] }); };
   const has = id => causes.some(c => c.id === id);
   const highCount = () => causes.filter(c => c.conf === 'high').length;
-  let kind = '', headline = '', normal = false;
+  let kind = '', headline = '', normal = false, fl = null;
   const err = (st >= 400 || st === 0 || (st === 200 && e.type === 'xhr')) ? errorInfo(e) : {};
   let loginRedirect = false;
   if (st >= 300 && st < 400 && e.redirectTarget) { try { loginRedirect = LOGIN_RE.test(new URL(e.redirectTarget).pathname); } catch (_) { /* bad URL */ } }
@@ -919,6 +947,10 @@ function classifyAuth(e) {
   else if (st === 419) { kind = 'Session'; headline = '419 Page Expired'; add('high', 'session_419', 'The session or CSRF token expired (HTTP 419)', 'Laravel and similar frameworks return 419 when the CSRF token no longer matches the session, usually because the page was open longer than the session lifetime.', ['Reload the page to get a fresh token; increase the session lifetime if needed.']); }
   else if (st === 440) { kind = 'Session'; headline = '440 Login Time-out'; add('high', 'session_440', 'The login session timed out (HTTP 440)', 'IIS / Exchange (Outlook on the web) return 440 when the session has expired.', ['Sign in again.']); }
   else if (st === 498) { kind = 'Authentication'; headline = '498 Invalid Token'; add('high', 'token_498', 'The token is expired or invalid (HTTP 498)', 'Some platforms (for example ArcGIS) return 498 for expired or invalid tokens.', ['Generate a new token.']); for (const c of sent) if (c.jwt) jwtCauses(c, e, add); }
+  else if ((fl = formLogin(e)) && (st >= 400 || (st === 200 && (e.type === 'xhr' ? err : errorInfo(e)).loginForm))) {
+    kind = 'Form sign-in'; headline = 'Sign-in form' + (fl.user && !/@/.test(fl.user) ? ' for "' + fl.user + '"' : '') + ' ' + (st === 200 ? 'answered with the sign-in page again' : 'rejected with HTTP ' + st + (e.statusText ? ' ' + e.statusText : ''));
+    formLoginCauses(e, fl, st, msgOf(st === 200 ? errorInfo(e) : err), add);
+  }
   else if (e.type === 'xhr' && (loginRedirect || (st === 200 && err.loginForm))) {
     if (e.redirectFrom && e.redirectFrom.auth && e.redirectFrom.auth.event) return null;
     kind = 'Session'; headline = 'API call ' + (st === 200 ? 'answered with a sign-in page' : 'redirected to the sign-in page');

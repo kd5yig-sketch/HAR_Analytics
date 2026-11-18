@@ -177,10 +177,11 @@ function netlogToHar(log) {
       if (n === 'HTTP_TRANSACTION_READ_HEADERS' && e.phase === PH.PHASE_END) cur.headersEnd = t;
       if ((n === 'URL_REQUEST_JOB_FILTERED_BYTES_READ') && p.byte_count) cur.bytes += p.byte_count;
       if ((n === 'URL_REQUEST_REDIRECT_JOB' || n === 'URL_REQUEST_REDIRECTED') && (p.location || p.url)) cur.location = p.location || p.url;
-      if (p.net_error && e.phase !== PH.PHASE_BEGIN && !cur.error) cur.error = errName(p.net_error);
+      if (p.net_error && e.phase !== PH.PHASE_BEGIN && !cur.error && !/^(HTTP_CACHE_|DISK_CACHE_|ENTRY_)/.test(n)) cur.error = errName(p.net_error); // cache-internal errors are not request failures
       if (n === 'REQUEST_ALIVE' && e.phase === PH.PHASE_END) lastEnd = t;
     }
     if (!hops.length) continue;
+    if (hops.length === 1 && hops[0].error === 'net::ERR_CACHE_MISS' && !hops[0].resHeaders) continue; // a cache-only lookup (preload / back-forward / speculative), not a network request
     if (isFinite(lastEnd)) hops[hops.length - 1].end = lastEnd;
     const r = reach(s.id);
     const cert = r.certs.find(c => c.leaf) || null;
@@ -236,8 +237,16 @@ function netlogToHar(log) {
 
 /* ---------- NetLog-only diagnoses ---------- */
 const CERT_FLAG_TEXT = { AUTHORITY_INVALID: 'not issued by a trusted authority', COMMON_NAME_INVALID: 'issued for a different host name', DATE_INVALID: 'expired or not valid yet', REVOKED: 'revoked', INVALID: 'invalid', WEAK_SIGNATURE_ALGORITHM: 'signed with a weak algorithm', NAME_CONSTRAINT_VIOLATION: 'violates a name constraint', CERTIFICATE_TRANSPARENCY_REQUIRED: 'missing Certificate Transparency', KNOWN_INTERCEPTION_BLOCKED: 'a known interception certificate', NON_UNIQUE_NAME: 'for a non-unique (internal) name', PINNED_KEY_MISSING: 'missing a pinned key', SYMANTEC_LEGACY: 'from the distrusted legacy Symantec PKI', VALIDITY_TOO_LONG: 'valid for too long', NO_REVOCATION_MECHANISM: 'without a revocation mechanism', UNABLE_TO_CHECK_REVOCATION: 'impossible to check for revocation' };
+// Sites whose certificate came from the same non-public issuer as this one (a TLS-inspection proxy signs them all).
+function inspectionSites(cert) {
+  if (cert.knownRoot !== false || !cert.leaf || !S.netlog) return [];
+  const sites = new Set();
+  for (const c of S.netlog.certs || []) if (c.leaf && c.knownRoot === false && c.leaf.issuer === cert.leaf.issuer && !c.leaf.selfSigned) { const n = c.leaf.sans[0] || c.leaf.cn; if (n && !/^(localhost|[\d.]+)$/.test(n)) sites.add(siteOf(n.replace(/^\*\./, ''))); }
+  return [...sites];
+}
 function certFacts(cert, host, when) {
   const L = cert.leaf, facts = [], causes = [];
+  let inspected = [];
   if (!L) return { facts, causes };
   facts.push('Certificate: ' + (L.cn || L.subject) + (L.sans.length ? ' (names: ' + L.sans.slice(0, 8).join(', ') + (L.sans.length > 8 ? ', …' : '') + ')' : ''));
   facts.push('Issued by: ' + (L.issuerCn || L.issuer) + (L.selfSigned ? ' (self-signed)' : '') + (cert.knownRoot === false ? ', not a publicly trusted root' : ''));
@@ -247,6 +256,7 @@ function certFacts(cert, host, when) {
   if (isFinite(L.notBefore) && L.notBefore > when) causes.push(C('high', 'cert_not_yet', 'The certificate is not valid yet (from ' + fmtDate(L.notBefore) + ')', 'Either it was installed too early or this computer’s clock is behind.', ['Check the client clock.']));
   if (host && !certCoversHost(L, host)) causes.push(C('high', 'cert_wrong_host', 'The certificate is for ' + (L.sans[0] || L.cn) + ', not ' + host, 'Names in the certificate: ' + (L.sans.join(', ') || L.cn) + '.', ['Install a certificate whose names include ' + host + ', or use a host name that is on the certificate.']));
   if (L.selfSigned) causes.push(C('high', 'cert_self_signed', 'The certificate is self-signed', 'Browsers only trust self-signed certificates that were installed as trusted roots on this device.', ['Use a certificate from a trusted CA, or install this one as a trusted root (development only).']));
+  else if ((inspected = inspectionSites(cert)).length >= 2) causes.push(C('high', 'tls_inspection', 'A TLS-inspection proxy is replacing certificates (' + (L.issuerCn || L.issuer) + ')', 'The same private CA issued the certificates Chrome received for ' + inspected.length + ' unrelated sites (' + inspected.slice(0, 4).join(', ') + (inspected.length > 4 ? ', …' : '') + '). Real sites use their own public CAs, so a proxy or security product on the network path (Zscaler, Netskope, a firewall, antivirus) is decrypting the traffic and re-signing it with its own root, which this device does not trust.', ['Install the inspection proxy’s root certificate on this device (ask IT for it), or have IT exempt these sites from inspection.', 'Apps with their own trust store (Node, Java, Python, Git) need the root added separately (NODE_EXTRA_CA_CERTS, the Java keystore, REQUESTS_CA_BUNDLE, http.sslCAInfo).']));
   else if (cert.knownRoot === false && cert.flags.includes('AUTHORITY_INVALID')) causes.push(C('likely', 'cert_private_ca', 'The certificate chain ends at a private or missing CA (' + (L.issuerCn || L.issuer) + ')', 'A corporate CA or TLS-inspection proxy root that is not installed on this device, or a server that does not send its intermediate certificate.', ['Install the issuing CA on the device, or configure the server to send the full chain.']));
   return { facts, causes };
 }

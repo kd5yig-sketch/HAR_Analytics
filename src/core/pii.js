@@ -14,12 +14,20 @@ function ibanOk(s) {
   let m = 0; for (const ch of r) { const v = /\d/.test(ch) ? ch : String(ch.charCodeAt(0) - 55); for (const d of v) m = (m * 10 + (+d)) % 97; }
   return m === 1;
 }
+// Addresses that are not about a person: system senders, git remotes, form placeholders, retina image names.
+const NOT_PERSON_EMAIL = /^(git|noreply|no-reply|donotreply|do-not-reply|you|your|yourname|your\.name|user|username|name|email|someone|somebody|first\.last|firstname\.lastname|john\.doe|jane\.doe)@/i;
+function emailOk(m) {
+  if (NOT_PERSON_EMAIL.test(m)) return false;
+  const dom = m.split('@')[1].toLowerCase();
+  if (/\.(png|jpe?g|gif|svg|webp|avif|ico|js|css|map|woff2?)$/.test(dom) || /^\d+x\./.test(dom)) return false;
+  return !/^(your)?(domain|company)\.(com|org|net)$/.test(dom);
+}
 const PII_KINDS = {
-  email: { label: 'Email address', re: /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g, ok: () => true },
-  card: { label: 'Payment card number', re: /(?<![\d.])(?:\d[ -]?){12,18}\d(?![\d.])/g, ok: m => { const d = m.replace(/\D/g, ''); return d.length >= 13 && d.length <= 19 && !/^(\d)\1+$/.test(d) && /^[2-6]/.test(d) && luhnOk(d); } },
+  email: { label: 'Email address', re: /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g, ok: emailOk },
+  card: { label: 'Payment card number', re: /(?<![\w.-])(?:\d[ -]?){12,18}\d(?![\w-]|\.\d)/g, ok: m => { const d = m.replace(/\D/g, ''); return d.length >= 13 && d.length <= 19 && !/^(\d)\1+$/.test(d) && /^[2-6]/.test(d) && luhnOk(d); } },
   ssn: { label: 'US Social Security number', re: /(?<![\d-])(?!000|666|9\d\d)\d{3}-(?!00)\d{2}-(?!0000)\d{4}(?![\d-])/g, ok: () => true },
   iban: { label: 'Bank account (IBAN)', re: /\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,4})?\b/g, ok: ibanOk },
-  phone: { label: 'Phone number', re: /(?<![\w.:/-])(?:\+\d{1,3}[ .-]?)?(?:\(\d{2,4}\)[ .-]?|\d{2,4}[ .-])\d{3,4}[ .-]\d{3,4}(?![\w.:/-])/g, ok: m => { const d = m.replace(/\D/g, ''); return d.length >= 9 && d.length <= 15 && !/^(19|20)\d{2}[01]\d[0-3]\d/.test(d); } },
+  phone: { label: 'Phone number', re: /(?<![\w.:/-])(?:\+\d{1,3}[ .-]?)?(?:\(\d{2,4}\)[ .-]?|\d{2,4}[ .-])\d{3,4}[ .-]\d{3,4}(?![\w.:/-])/g, ok: (m, text, at) => { const d = m.replace(/\D/g, ''); if (/\./.test(m) && / /.test(m.replace(/^\+\d+ /, ''))) return false; if (text && /\d[ ,]$/.test(text.slice(Math.max(0, at - 2), at))) return false; return d.length >= 9 && d.length <= 15 && !/^(19|20)\d{2}[01]\d[0-3]\d/.test(d); } },
 };
 const CLIENT_IP_HEADERS = /^(x-forwarded-for|x-real-ip|cf-connecting-ip|true-client-ip|x-client-ip|forwarded)$/i;
 function maskSample(kind, m) {
@@ -38,7 +46,7 @@ function piiInText(text, kinds) {
     let m;
     while ((m = P.re.exec(text))) {
       const a = m.index, b = a + m[0].length;
-      if (P.ok(m[0]) && !out.some(x => a < x.index + x.value.length && x.index < b)) out.push({ kind: k, value: m[0], index: a });
+      if (P.ok(m[0], text, a) && !out.some(x => a < x.index + x.value.length && x.index < b)) out.push({ kind: k, value: m[0], index: a });
       if (out.length > 500) return out;
     }
   }
@@ -74,7 +82,7 @@ function maskPii(s) {
   if (typeof s !== 'string' || s.length < 6) return s;
   // Percent-encoded emails in URLs and form bodies (jane%40example.com)
   s = s.replace(/[A-Za-z0-9._+-]+%40[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/gi, '[REDACTED]');
-  for (const k of PII_ORDER) { const P = PII_KINDS[k]; s = s.replace(P.re, m => (P.ok(m) ? '[REDACTED]' : m)); }
+  for (const k of PII_ORDER) { const P = PII_KINDS[k]; s = s.replace(P.re, (m, at, str) => (P.ok(m, str, at) ? '[REDACTED]' : m)); }
   return s;
 }
 function diagPii() {

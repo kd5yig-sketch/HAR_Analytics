@@ -374,6 +374,14 @@ function idx() {
 }
 const sameUrl = e => idx().byUrl.get(String(e.url).split(/[?#]/)[0]) || [];
 // Index of the first element whose key >= v in an array sorted by key.
+// Decode the HTML entities found in page titles (&amp; &middot; &#8253; &#x2014; …).
+const HTML_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', middot: '·', mdash: '—', ndash: '–', hellip: '…', laquo: '«', raquo: '»', rsquo: '’', lsquo: '‘', ldquo: '“', rdquo: '”', copy: '©', reg: '®', trade: '™', bull: '•' };
+function htmlDecode(s) {
+  return String(s).replace(/&(#x[0-9a-f]{1,6}|#\d{1,7}|[a-z]{2,8});/gi, (m, c) => {
+    if (c[0] === '#') { const n = c[1] === 'x' || c[1] === 'X' ? parseInt(c.slice(2), 16) : +c.slice(1); return n > 0 && n < 0x110000 ? String.fromCodePoint(n) : m; }
+    return HTML_ENTITIES[c.toLowerCase()] ?? m;
+  }).replace(/\s+/g, ' ').trim();
+}
 function lowerBound(arr, v, key) { let lo = 0, hi = arr.length; while (lo < hi) { const mid = (lo + hi) >> 1; if ((key ? key(arr[mid]) : arr[mid]) < v) lo = mid + 1; else hi = mid; } return lo; }
 
 function csvText(list) {
