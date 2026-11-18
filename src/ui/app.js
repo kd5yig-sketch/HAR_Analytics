@@ -377,6 +377,8 @@ function renderDetail() {
         h('span', { class: 'muted', text: '#' + e.i + ' · ' + fmtMs(e.time) + ' · ' + fmtBytes(e.transfer) }),
         h('span', { class: 'spacer' }),
         nc.star, nc.btn,
+        h('button', { id: 'btn-decode', title: 'Decode the selected text (or paste some): JWT, base64, URL encoding, gzip, hex, timestamps', onclick: () => openDecode(String(window.getSelection ? window.getSelection() : '').trim()), text: 'Decode…' }),
+        h('button', { id: 'btn-diff', title: 'Compare this response with another request (same endpoint first)', onclick: () => openDiff(e), text: 'Compare…' }),
         h('button', { title: 'Copy URL', onclick: () => copyText(e.url), text: 'Copy URL' }),
         h('button', { title: 'Copy this request as a curl command', onclick: () => copyText(toCurl(e)), text: 'Copy as cURL' }),
         h('button', { title: 'Close (Esc)', onclick: () => select(null), text: '✕' })),
@@ -426,9 +428,7 @@ function detailTab(e, tab) {
         if (/x-www-form-urlencoded/i.test(pd.mimeType || '') && !(pd.params && pd.params.length)) {
           try { out.push(kvList([...new URLSearchParams(text)])); } catch (_) { /* show raw */ }
         }
-        const p = prettyBody(text, pd.mimeType || '');
-        if (p.note) out.push(h('p', { class: 'note', text: p.note }));
-        out.push(h('pre', { class: 'body', text: p.out }));
+        out.push(...bodyViewer(text, pd.mimeType || ''));
       }
     }
     return out;
@@ -451,10 +451,9 @@ function detailTab(e, tab) {
       out.push(h('p', { class: 'note', text: 'Binary content (' + fmtBytes(Math.floor(content.text.length * 3 / 4)) + '), not shown.' }));
       return out;
     }
-    const p = prettyBody(bodyText(content), mime);
-    if (!p) { out.push(h('p', { class: 'note', text: 'Could not decode the body.' })); return out; }
-    if (p.note) out.push(h('p', { class: 'note', text: p.note }));
-    out.push(h('pre', { class: 'body', text: p.out }));
+    const body = bodyText(content);
+    if (body == null) { out.push(h('p', { class: 'note', text: 'Could not decode the body.' })); return out; }
+    out.push(...bodyViewer(body, mime));
     return out;
   }
   if (tab === 'timing') {

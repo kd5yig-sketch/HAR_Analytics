@@ -127,6 +127,20 @@
   <div id="x-preview-out"></div>
   <p style="margin:12px 0 0"><button id="x-csv">Request list as CSV</button> <span class="muted" style="font-size:12px">(not redacted; for your own use)</span> <span class="muted" style="font-size:12px">· Notes in this file: <span id="x-notes-count">0</span></span></p>
 </dialog>
+<dialog id="dlg-decode" class="wide">
+  <h3>Decode</h3>
+  <p class="muted" style="margin:0 0 8px">Paste or select text: JWTs, base64 (also gzip / deflate inside, e.g. SAML), URL encoding, hex, Unix times, HTML entities, JSON. Decoding happens on this computer.</p>
+  <textarea id="dec-in" rows="4" spellcheck="false" aria-label="Text to decode"></textarea>
+  <div id="dec-out"></div>
+  <div class="actions"><span class="spacer"></span><button id="dec-close">Close</button></div>
+</dialog>
+<dialog id="dlg-diff" class="wide">
+  <h3>Compare responses</h3>
+  <p class="muted" style="margin:0 0 6px">Base: <span id="diff-base" class="mono"></span></p>
+  <label style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">Compare with <select id="diff-with" style="max-width:100%"></select></label>
+  <div id="diff-out"></div>
+  <div class="actions"><span class="spacer"></span><button id="diff-close">Close</button></div>
+</dialog>
 <div id="toast"></div>
 <div id="loading" class="hidden" role="status" aria-live="polite"><div class="lbox"><div class="spin"></div><div id="loading-text">Loading…</div></div></div>
 

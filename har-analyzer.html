@@ -274,6 +274,25 @@ dialog { max-width: 640px; }
 .note-text { width: 100%; margin-top: 8px; font: inherit; font-size: 12px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
 button.star { font-size: 15px; line-height: 1; } button.star.on { color: #d29e00; border-color: #d29e00; }
 .nmark { color: #d29e00; }
+
+/* Body tools */
+.btool { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0 8px; }
+.bmode { display: inline-flex; gap: 4px; } .bmode .chip.on { background: var(--accent-soft); border-color: var(--accent); }
+.jpath { flex: 1 1 260px; min-width: 0; font-family: var(--mono); font-size: 12px; }
+.jtree { font-family: var(--mono); font-size: 12px; background: var(--panel-2); border-radius: 6px; padding: 8px 10px; overflow-x: auto; user-select: text; }
+.jtree details > summary { cursor: pointer; list-style: none; } .jtree details > summary::before { content: '▸ '; color: var(--muted); } .jtree details[open] > summary::before { content: '▾ '; }
+.jkids { padding-left: 16px; border-left: 1px dotted var(--border); margin-left: 4px; }
+.jrow { padding-left: 14px; white-space: pre-wrap; word-break: break-all; }
+.jk { color: var(--info); } .jsum { color: var(--muted); }
+.j-string { color: var(--ok); } .j-number { color: var(--accent); } .j-boolean { color: var(--warn); } .j-null { color: var(--muted); }
+.jmatches .kv { margin-bottom: 10px; }
+iframe.hprev { width: 100%; height: 420px; border: 1px solid var(--border); border-radius: 6px; background: #fff; }
+dialog.wide { max-width: 980px; width: calc(100% - 32px); }
+#dec-in { width: 100%; font-family: var(--mono); font-size: 12px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
+#dec-out, #diff-out { max-height: 60vh; overflow: auto; margin-top: 10px; }
+.decres { margin-bottom: 10px; } .decres pre.body { max-height: 260px; overflow: auto; margin: 4px 0; }
+.ldiff { font-family: var(--mono); font-size: 12px; background: var(--panel-2); border-radius: 6px; padding: 6px; }
+.dl { white-space: pre-wrap; word-break: break-all; } .dl.add { background: color-mix(in srgb, var(--ok) 18%, transparent); } .dl.del { background: var(--err-soft); } .dl.skip { color: var(--muted); font-style: italic; }
 </style>
 </head>
 <body>
@@ -388,6 +407,20 @@ button.star { font-size: 15px; line-height: 1; } button.star.on { color: #d29e00
   </div>
   <div id="x-preview-out"></div>
   <p style="margin:12px 0 0"><button id="x-csv">Request list as CSV</button> <span class="muted" style="font-size:12px">(not redacted; for your own use)</span> <span class="muted" style="font-size:12px">· Notes in this file: <span id="x-notes-count">0</span></span></p>
+</dialog>
+<dialog id="dlg-decode" class="wide">
+  <h3>Decode</h3>
+  <p class="muted" style="margin:0 0 8px">Paste or select text: JWTs, base64 (also gzip / deflate inside, e.g. SAML), URL encoding, hex, Unix times, HTML entities, JSON. Decoding happens on this computer.</p>
+  <textarea id="dec-in" rows="4" spellcheck="false" aria-label="Text to decode"></textarea>
+  <div id="dec-out"></div>
+  <div class="actions"><span class="spacer"></span><button id="dec-close">Close</button></div>
+</dialog>
+<dialog id="dlg-diff" class="wide">
+  <h3>Compare responses</h3>
+  <p class="muted" style="margin:0 0 6px">Base: <span id="diff-base" class="mono"></span></p>
+  <label style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">Compare with <select id="diff-with" style="max-width:100%"></select></label>
+  <div id="diff-out"></div>
+  <div class="actions"><span class="spacer"></span><button id="diff-close">Close</button></div>
 </dialog>
 <div id="toast"></div>
 <div id="loading" class="hidden" role="status" aria-live="polite"><div class="lbox"><div class="spin"></div><div id="loading-text">Loading…</div></div></div>
@@ -2765,6 +2798,125 @@ function compareHars(A, B) {
   return r;
 }
 
+// ---- src/core/bodytools.js ----
+/* ---------- body tools: path search, decoders, diffs ---------- */
+
+// JSONPath subset: $  .key  ['key']  [n]  [-n]  [a:b]  [*]  .*  ..key  ..*
+// A leading "$" is optional ("data.items[*].id" works).
+function jsonPath(root, expr) {
+  expr = String(expr || '').trim();
+  if (!expr) return [];
+  if (expr[0] !== '$') expr = '$' + (expr[0] === '[' || expr.startsWith('..') ? '' : '.') + expr;
+  const toks = []; let i = 1;
+  const name = () => { const m = /^(\*|[^.[\]\s]+)/.exec(expr.slice(i)); if (!m) throw new Error('expected a name at position ' + (i + 1)); i += m[1].length; return m[1]; };
+  while (i < expr.length) {
+    if (expr.startsWith('..', i)) { i += 2; toks.push({ deep: true, key: expr[i] === '[' ? '*' : name() }); continue; }
+    if (expr[i] === '.') { i++; toks.push({ key: name() }); continue; }
+    if (expr[i] === '[') {
+      const j = expr.indexOf(']', i); if (j < 0) throw new Error('missing ]');
+      const inner = expr.slice(i + 1, j).trim(); i = j + 1;
+      if (inner === '*') toks.push({ key: '*' });
+      else if (/^-?\d+$/.test(inner)) toks.push({ index: +inner });
+      else if (/^(['"]).*\1$/.test(inner)) toks.push({ key: inner.slice(1, -1) });
+      else if (/^-?\d*:-?\d*$/.test(inner)) { const [a, b] = inner.split(':'); toks.push({ slice: [a === '' ? 0 : +a, b === '' ? undefined : +b] }); }
+      else throw new Error('unsupported [' + inner + ']');
+      continue;
+    }
+    throw new Error('unexpected "' + expr[i] + '" at position ' + (i + 1));
+  }
+  const kidPath = (p, k, isArr) => isArr ? p + '[' + k + ']' : (/^[A-Za-z_$][\w$]*$/.test(k) ? p + '.' + k : p + "['" + String(k).replace(/'/g, "\\'") + "']");
+  const kids = n => Array.isArray(n.v) ? n.v.map((x, k) => ({ path: kidPath(n.path, k, true), v: x, k })) : n.v && typeof n.v === 'object' ? Object.keys(n.v).map(k => ({ path: kidPath(n.path, k, false), v: n.v[k], k })) : [];
+  let cur = [{ path: '$', v: root }];
+  for (const t of toks) {
+    const next = [];
+    for (const n of cur) {
+      if (t.deep) { const walk = x => { for (const c of kids(x)) { if (t.key === '*' || String(c.k) === t.key) next.push(c); if (next.length < 20000) walk(c); } }; walk(n); }
+      else if (t.key === '*') next.push(...kids(n));
+      else if (t.key != null) { if (n.v && typeof n.v === 'object' && !Array.isArray(n.v) && Object.prototype.hasOwnProperty.call(n.v, t.key)) next.push({ path: kidPath(n.path, t.key, false), v: n.v[t.key] }); }
+      else if (t.index != null) { if (Array.isArray(n.v)) { const k = t.index < 0 ? n.v.length + t.index : t.index; if (k >= 0 && k < n.v.length) next.push({ path: kidPath(n.path, k, true), v: n.v[k] }); } }
+      else if (t.slice && Array.isArray(n.v)) { const len = n.v.length, norm = x => x < 0 ? Math.max(0, len + x) : x, a = norm(t.slice[0]), b = t.slice[1] === undefined ? len : norm(t.slice[1]); for (let k = a; k < Math.min(b, len); k++) next.push({ path: kidPath(n.path, k, true), v: n.v[k] }); }
+    }
+    cur = next.slice(0, 20000);
+  }
+  return cur;
+}
+
+// Try every sensible decoding of a string; returns [{ label, value }].
+async function decodeAll(input) {
+  const s = String(input || '').trim(), out = [], seen = new Set();
+  const add = (label, value) => { if (value == null) return; value = String(value); if (!value || value === s || seen.has(label + value)) return; seen.add(label + value); out.push({ label, value }); };
+  if (!s) return out;
+  const printable = t => t && !/[\u0000-\u0008\u000e-\u001f�]/.test(t.slice(0, 2000));
+  const pretty = t => { try { return JSON.stringify(JSON.parse(t), null, 2); } catch (_) { return null; } };
+  const j = parseJwt(s);
+  if (j) {
+    add('JWT header', JSON.stringify(j.header, null, 2));
+    if (j.payload) {
+      add('JWT payload (signature not verified)', JSON.stringify(j.payload, null, 2));
+      const times = ['exp', 'iat', 'nbf', 'auth_time'].filter(k => typeof j.payload[k] === 'number').map(k => k + ': ' + fmtDate(j.payload[k] * 1000));
+      if (times.length) add('JWT times', times.join('\n'));
+    }
+  }
+  if (/%[0-9a-f]{2}/i.test(s) || /\+/.test(s) && /=/.test(s)) { try { add('URL-decoded', decodeURIComponent(s.replace(/\+/g, ' '))); } catch (_) { /* malformed escape */ } }
+  if (/^[\w.%+-]+=[^&]*(&[\w.%+-]+=[^&]*)+$/.test(s)) { try { add('Form / query parameters', [...new URLSearchParams(s)].map(([k, v]) => k + ' = ' + v).join('\n')); } catch (_) { /* not a form */ } }
+  if (/^[A-Za-z0-9+/_-]+={0,2}$/.test(s.replace(/\s+/g, '')) && s.length >= 8) {
+    let bytes = null; try { bytes = b64ToBytes(s); } catch (_) { /* not base64 */ }
+    if (bytes && bytes.length) {
+      const txt = utf8(bytes);
+      if (printable(txt)) add('Base64-decoded' + (pretty(txt) ? ' (JSON)' : ''), pretty(txt) || txt);
+      for (const [fmt, label, test] of [['gzip', 'Base64 + gzip', b => b[0] === 0x1f && b[1] === 0x8b], ['deflate', 'Base64 + zlib', b => b[0] === 0x78 && [0x01, 0x5e, 0x9c, 0xda].includes(b[1])], ['deflate-raw', 'Base64 + deflate (e.g. a SAML redirect)', () => true]]) {
+        if (!test(bytes) || typeof DecompressionStream === 'undefined') continue;
+        try { const t = await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream(fmt))).text(); if (printable(t) && t.length) { add(label, pretty(t) || t); break; } } catch (_) { /* not compressed this way */ }
+      }
+      if (!printable(txt) && !out.some(x => x.label.startsWith('Base64 +')) && !/^(\d+|[0-9a-f]+)$/i.test(s)) add('Base64-decoded bytes (hex)', [...bytes.slice(0, 256)].map(b => b.toString(16).padStart(2, '0')).join(' ') + (bytes.length > 256 ? ' … (' + bytes.length + ' bytes)' : ''));
+    }
+  }
+  if (/^(0x)?[0-9a-f]+$/i.test(s) && s.replace(/^0x/i, '').length % 2 === 0 && s.length >= 8 && /[a-f]/i.test(s)) {
+    const hex = s.replace(/^0x/i, ''), b = new Uint8Array(hex.length / 2); for (let k = 0; k < b.length; k++) b[k] = parseInt(hex.substr(k * 2, 2), 16);
+    const t = utf8(b); if (printable(t)) add('Hex-decoded', t);
+  }
+  if (/^\d{10}(\.\d+)?$/.test(s)) add('Unix time (seconds)', fmtDate(+s * 1000));
+  if (/^\d{13}$/.test(s)) add('Unix time (milliseconds)', fmtDate(+s));
+  if (/&(#\d+|#x[0-9a-f]+|[a-z]+);/i.test(s)) add('HTML entities decoded', s.replace(/&(lt|gt|amp|quot|apos|#\d+|#x[0-9a-f]+);/gi, (m, e) => ({ lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" })[e.toLowerCase()] || String.fromCodePoint(e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10))));
+  if (/^[\[{]/.test(s) && pretty(s)) add('JSON (formatted)', pretty(s));
+  return out.length > 1 ? out.filter(x => !x.label.startsWith('Base64-decoded bytes')) : out;
+}
+
+// Structural JSON diff: [{ path, kind: 'added' | 'removed' | 'changed', a, b }]
+function diffJson(a, b, path = '$', out = []) {
+  if (out.length >= 1000) return out;
+  const type = v => Array.isArray(v) ? 'array' : v === null ? 'null' : typeof v;
+  if (type(a) !== type(b)) { out.push({ path, kind: 'changed', a, b }); return out; }
+  if (type(a) === 'object') {
+    for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+      const p = /^[A-Za-z_$][\w$]*$/.test(k) ? path + '.' + k : path + "['" + k + "']";
+      if (!(k in b)) out.push({ path: p, kind: 'removed', a: a[k] });
+      else if (!(k in a)) out.push({ path: p, kind: 'added', b: b[k] });
+      else diffJson(a[k], b[k], p, out);
+    }
+  } else if (type(a) === 'array') {
+    for (let k = 0; k < Math.max(a.length, b.length); k++) {
+      const p = path + '[' + k + ']';
+      if (k >= b.length) out.push({ path: p, kind: 'removed', a: a[k] });
+      else if (k >= a.length) out.push({ path: p, kind: 'added', b: b[k] });
+      else diffJson(a[k], b[k], p, out);
+    }
+  } else if (a !== b) out.push({ path, kind: 'changed', a, b });
+  return out;
+}
+// Line diff (LCS); returns [{ op: ' ' | '-' | '+', line }]
+function diffLines(a, b) {
+  const A = String(a).split('\n'), B = String(b).split('\n');
+  if (A.length * B.length > 4e6) return [...A.map(line => ({ op: '-', line })), ...B.map(line => ({ op: '+', line }))];
+  const n = A.length, m = B.length, L = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = A[i] === B[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const out = []; let i = 0, j = 0;
+  while (i < n && j < m) { if (A[i] === B[j]) { out.push({ op: ' ', line: A[i] }); i++; j++; } else if (L[i + 1][j] >= L[i][j + 1]) out.push({ op: '-', line: A[i++] }); else out.push({ op: '+', line: B[j++] }); }
+  while (i < n) out.push({ op: '-', line: A[i++] });
+  while (j < m) out.push({ op: '+', line: B[j++] });
+  return out;
+}
+
 // ---- src/core/settings.js ----
 /* ---------- settings: what the analyzer knows about YOUR environment ----------
    Saved in the browser (localStorage) or passed to the CLI with --settings.
@@ -3430,6 +3582,8 @@ function renderDetail() {
         h('span', { class: 'muted', text: '#' + e.i + ' · ' + fmtMs(e.time) + ' · ' + fmtBytes(e.transfer) }),
         h('span', { class: 'spacer' }),
         nc.star, nc.btn,
+        h('button', { id: 'btn-decode', title: 'Decode the selected text (or paste some): JWT, base64, URL encoding, gzip, hex, timestamps', onclick: () => openDecode(String(window.getSelection ? window.getSelection() : '').trim()), text: 'Decode…' }),
+        h('button', { id: 'btn-diff', title: 'Compare this response with another request (same endpoint first)', onclick: () => openDiff(e), text: 'Compare…' }),
         h('button', { title: 'Copy URL', onclick: () => copyText(e.url), text: 'Copy URL' }),
         h('button', { title: 'Copy this request as a curl command', onclick: () => copyText(toCurl(e)), text: 'Copy as cURL' }),
         h('button', { title: 'Close (Esc)', onclick: () => select(null), text: '✕' })),
@@ -3479,9 +3633,7 @@ function detailTab(e, tab) {
         if (/x-www-form-urlencoded/i.test(pd.mimeType || '') && !(pd.params && pd.params.length)) {
           try { out.push(kvList([...new URLSearchParams(text)])); } catch (_) { /* show raw */ }
         }
-        const p = prettyBody(text, pd.mimeType || '');
-        if (p.note) out.push(h('p', { class: 'note', text: p.note }));
-        out.push(h('pre', { class: 'body', text: p.out }));
+        out.push(...bodyViewer(text, pd.mimeType || ''));
       }
     }
     return out;
@@ -3504,10 +3656,9 @@ function detailTab(e, tab) {
       out.push(h('p', { class: 'note', text: 'Binary content (' + fmtBytes(Math.floor(content.text.length * 3 / 4)) + '), not shown.' }));
       return out;
     }
-    const p = prettyBody(bodyText(content), mime);
-    if (!p) { out.push(h('p', { class: 'note', text: 'Could not decode the body.' })); return out; }
-    if (p.note) out.push(h('p', { class: 'note', text: p.note }));
-    out.push(h('pre', { class: 'body', text: p.out }));
+    const body = bodyText(content);
+    if (body == null) { out.push(h('p', { class: 'note', text: 'Could not decode the body.' })); return out; }
+    out.push(...bodyViewer(body, mime));
     return out;
   }
   if (tab === 'timing') {
@@ -3964,6 +4115,116 @@ async function downloadBundle() {
   $('#dlg-export').close(); toast('Case bundle saved');
 }
 
+// ---- src/ui/body-tools.js ----
+/* ---------- body viewer: JSON tree, path search, HTML preview ---------- */
+S.bodyMode = 'tree';
+function jsonTree(value, key, depth = 0) {
+  const kid = (k, v) => jsonTree(v, k, depth + 1);
+  const label = key == null ? null : h('span', { class: 'jk', text: (typeof key === 'number' ? key : JSON.stringify(key)) + ': ' });
+  if (value === null || typeof value !== 'object') {
+    const t = value === null ? 'null' : typeof value;
+    return h('div', { class: 'jrow' }, label, h('span', { class: 'jv j-' + t, text: t === 'string' ? JSON.stringify(value) : String(value) }));
+  }
+  const arr = Array.isArray(value), keys = arr ? value.map((_, i) => i) : Object.keys(value);
+  const sum = arr ? '[' + keys.length + ']' : '{' + keys.length + '}';
+  if (!keys.length) return h('div', { class: 'jrow' }, label, h('span', { class: 'jv', text: arr ? '[]' : '{}' }));
+  return h('details', { class: 'jnode', open: depth < 2 ? true : null },
+    h('summary', null, label, h('span', { class: 'jsum', text: sum })),
+    h('div', { class: 'jkids' }, capped(keys, k => kid(k, value[k]), 200)));
+}
+function bodyViewer(text, mime) {
+  if (text == null) return [];
+  let parsed; const isJson = /^\s*[[{]/.test(text) && (() => { try { parsed = JSON.parse(text); return true; } catch (_) { return false; } })();
+  const raw = () => { const p = prettyBody(text, mime); return [p.note ? h('p', { class: 'note', text: p.note }) : null, h('pre', { class: 'body', text: p.out })]; };
+  if (isJson) {
+    const view = h('div', { class: 'bview' });
+    const out = h('div', { class: 'jmatches' });
+    const q = h('input', { type: 'search', class: 'jpath', placeholder: 'Find by path, e.g. data.items[*].id or ..message', 'aria-label': 'Find by JSON path' });
+    const run = () => {
+      const expr = q.value.trim();
+      if (!expr) { out.replaceChildren(); return; }
+      try {
+        const r = jsonPath(parsed, expr);
+        out.replaceChildren(r.length ? h('div', { class: 'note', text: r.length + ' match' + (r.length > 1 ? 'es' : '') }) : h('div', { class: 'note', text: 'No matches.' }),
+          h('div', { class: 'kv' }, r.slice(0, 500).map(m => [h('div', { class: 'k', text: m.path }), h('div', { class: 'v', text: typeof m.v === 'string' ? m.v : JSON.stringify(m.v) })])));
+      } catch (err) { out.replaceChildren(h('div', { class: 'note errtxt', text: 'Path error: ' + err.message })); }
+    };
+    let t; q.oninput = () => { clearTimeout(t); t = setTimeout(run, 150); };
+    const draw = () => { view.replaceChildren(...[].concat(S.bodyMode === 'tree' ? h('div', { class: 'jtree' }, jsonTree(parsed)) : raw()).filter(Boolean)); $$('.bmode button', bar).forEach(b => b.classList.toggle('on', b.dataset.mode === S.bodyMode)); };
+    const bar = h('div', { class: 'btool' }, h('span', { class: 'bmode' }, ['tree', 'raw'].map(m => h('button', { 'data-mode': m, class: 'chip', text: m === 'tree' ? 'Tree' : 'Raw', onclick: () => { S.bodyMode = m; draw(); } }))), q);
+    draw();
+    return [bar, out, view];
+  }
+  if (/html/i.test(mime) || /^\s*<(!doctype|html)/i.test(text)) {
+    const view = h('div', { class: 'bview' }); let mode = 'source';
+    const draw = () => {
+      // The preview is sandboxed (no scripts, no forms, no navigation) and inherits this page's
+      // Content-Security-Policy, so it cannot load anything from the network.
+      view.replaceChildren(...[].concat(mode === 'source' ? raw() : [h('p', { class: 'note', text: 'Sandboxed preview: scripts are disabled and nothing is loaded from the network, so images and stylesheets from other URLs will be missing.' }), h('iframe', { class: 'hprev', sandbox: '', referrerpolicy: 'no-referrer', title: 'Sandboxed preview of the HTML response', srcdoc: text.slice(0, 2e6) })]).filter(Boolean));
+      $$('.bmode button', bar).forEach(b => b.classList.toggle('on', b.dataset.mode === mode));
+    };
+    const bar = h('div', { class: 'btool' }, h('span', { class: 'bmode' }, [['source', 'Source'], ['preview', 'Preview']].map(([m, l]) => h('button', { 'data-mode': m, class: 'chip', text: l, onclick: () => { mode = m; draw(); } }))));
+    draw();
+    return [bar, view];
+  }
+  return raw();
+}
+
+/* ---------- decode dialog ---------- */
+function openDecode(prefill) {
+  const d = $('#dlg-decode'), ta = $('#dec-in');
+  ta.value = prefill || '';
+  d.showModal(); ta.focus();
+  runDecode();
+}
+async function runDecode() {
+  const r = await decodeAll($('#dec-in').value);
+  $('#dec-out').replaceChildren(...(r.length ? r.map(x => h('div', { class: 'decres' }, h('div', { class: 'k', text: x.label }), h('pre', { class: 'body', text: x.value }), h('button', { class: 'icon', text: 'Copy', onclick: () => copyText(x.value) }))) : [h('p', { class: 'note', text: $('#dec-in').value.trim() ? 'Nothing to decode: not recognized as JWT, base64, URL encoding, hex, a Unix time, HTML entities or JSON.' : 'Paste or select text to decode.' })]));
+}
+
+/* ---------- compare two responses ---------- */
+function diffCandidates(e) {
+  const k = cmpKey(e), same = S.entries.filter(x => x !== e && cmpKey(x) === k), host = S.entries.filter(x => x !== e && x.host === e.host && cmpKey(x) !== k);
+  return { same, host };
+}
+function openDiff(e) {
+  const { same, host } = diffCandidates(e), sel = $('#diff-with');
+  const opt = x => h('option', { value: String(x.i), text: '#' + x.i + ' ' + x.method + ' ' + (x.u ? x.u.pathname + x.u.search : x.url).slice(0, 90) + ' → ' + (x.status || 'failed') });
+  sel.replaceChildren(same.length ? h('optgroup', { label: 'Same endpoint' }, same.map(opt)) : null, host.length ? h('optgroup', { label: 'Same host' }, host.slice(0, 300).map(opt)) : null);
+  $('#diff-base').textContent = '#' + e.i + ' ' + e.method + ' ' + e.url.slice(0, 120) + ' → ' + (e.status || 'failed');
+  $('#dlg-diff').dataset.base = String(e.i);
+  $('#dlg-diff').showModal();
+  if (sel.options.length) renderDiff(); else $('#diff-out').replaceChildren(h('p', { class: 'note', text: 'No other requests to this host.' }));
+}
+function renderDiff() {
+  const a = S.entries.find(x => x.i === +$('#dlg-diff').dataset.base), b = S.entries.find(x => x.i === +$('#diff-with').value);
+  if (!a || !b) return;
+  const sec = (title, nodes) => [h('h4', { text: title }), ...nodes];
+  const bodyA = bodyText((a.raw.response || {}).content || {}), bodyB = bodyText((b.raw.response || {}).content || {});
+  const out = [];
+  const st = [['Status', a.status || 'failed', b.status || 'failed'], ['Time', fmtMs(a.time), fmtMs(b.time)], ['Size', fmtBytes(a.transfer), fmtBytes(b.transfer)], ['Content-Type', a.mime, b.mime]];
+  out.push(...sec('Summary', [h('table', { class: 'simple cmp' }, h('thead', null, h('tr', null, h('th', { text: '' }), h('th', { text: '#' + a.i }), h('th', { text: '#' + b.i }))), h('tbody', null, st.map(([l, x, y]) => h('tr', { class: String(x) !== String(y) ? 'diff' : '' }, h('td', { text: l }), h('td', { text: String(x) }), h('td', { text: String(y) })))))]));
+  let ja, jb; const jsonA = (() => { try { ja = JSON.parse(bodyA); return true; } catch (_) { return false; } })(), jsonB = (() => { try { jb = JSON.parse(bodyB); return true; } catch (_) { return false; } })();
+  if (bodyA == null || bodyB == null) out.push(...sec('Response body', [h('p', { class: 'note', text: 'One of the responses has no saved body.' })]));
+  else if (jsonA && jsonB) {
+    const d = diffJson(ja, jb), fmt = v => v === undefined ? '' : JSON.stringify(v).slice(0, 300);
+    out.push(...sec('Response body (JSON, ' + (d.length ? d.length + ' difference' + (d.length > 1 ? 's' : '') : 'identical') + ')', [d.length ? h('table', { class: 'simple cmp jdiff' }, h('colgroup', null, h('col', { style: { width: '34%' } }), h('col'), h('col')), h('thead', null, h('tr', null, h('th', { text: 'Path' }), h('th', { text: '#' + a.i }), h('th', { text: '#' + b.i }))),
+      h('tbody', null, capped(d, x => h('tr', { class: x.kind === 'added' ? 'better' : x.kind === 'removed' ? 'worse' : 'diff' }, h('td', { class: 'mono', text: x.path + (x.kind !== 'changed' ? ' (' + x.kind + ')' : '') }), h('td', { class: 'mono', text: fmt(x.a) }), h('td', { class: 'mono', text: fmt(x.b) })), 200))) : h('p', { class: 'note', text: 'The JSON bodies are identical.' })]));
+  } else {
+    const d = diffLines(prettyBody(bodyA, a.mime).out, prettyBody(bodyB, b.mime).out), changed = d.filter(x => x.op !== ' ').length;
+    const rows = []; let run = 0;
+    d.forEach((x, k) => { const near = d.slice(Math.max(0, k - 2), k + 3).some(y => y.op !== ' '); if (x.op !== ' ' || near) { if (run) rows.push(h('div', { class: 'dl skip', text: '… ' + run + ' unchanged line' + (run > 1 ? 's' : '') })); run = 0; rows.push(h('div', { class: 'dl ' + (x.op === '+' ? 'add' : x.op === '-' ? 'del' : ''), text: x.op + ' ' + x.line })); } else run++; });
+    if (run) rows.push(h('div', { class: 'dl skip', text: '… ' + run + ' unchanged line' + (run > 1 ? 's' : '') }));
+    out.push(...sec('Response body (' + (changed ? changed + ' changed line' + (changed > 1 ? 's' : '') : 'identical') + ')', [h('div', { class: 'ldiff' }, rows.slice(0, 2000))]));
+  }
+  const hdrDiff = (la, lb) => { const m = new Map(); for (const x of la || []) m.set(x.name.toLowerCase(), [x.value, undefined]); for (const x of lb || []) { const k = x.name.toLowerCase(); m.set(k, [(m.get(k) || [])[0], x.value]); } return [...m].filter(([k, [x, y]]) => x !== y && !/^(date|x-request-id|x-amzn-requestid|cf-ray|age|x-amz-cf-id|traceparent|x-trace-id|content-length)$/.test(k)); };
+  for (const [title, la, lb] of [['Response headers', a.raw.response.headers, b.raw.response.headers], ['Request headers', a.raw.request.headers, b.raw.request.headers]]) {
+    const d = hdrDiff(la, lb);
+    out.push(...sec(title + ' (' + (d.length || 'no') + ' difference' + (d.length === 1 ? '' : 's') + ', ignoring dates and request IDs)', d.length ? [h('table', { class: 'simple cmp' }, h('tbody', null, d.map(([k, [x, y]]) => h('tr', { class: 'diff' }, h('td', { class: 'mono', text: k }), h('td', { class: 'mono', text: x ?? '(none)' }), h('td', { class: 'mono', text: y ?? '(none)' })))))] : []));
+  }
+  $('#diff-out').replaceChildren(...out);
+}
+
 // ---- src/ui/events.js ----
 /* ---------- events ---------- */
 $('#btn-open').onclick = $('#btn-open2').onclick = () => $('#file').click();
@@ -4010,7 +4271,7 @@ $('#rows').onclick = ev => { const r = ev.target.closest('.row'); if (r) select(
 
 document.addEventListener('keydown', ev => {
   const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement && document.activeElement.tagName);
-  if ($('#dlg-export').open) return;
+  if ($('#dlg-export').open || $('#dlg-decode').open || $('#dlg-diff').open) return;
   if (ev.key === '/' && !typing && S.entries.length) { ev.preventDefault(); show('requests'); $('#q').focus(); return; }
   if (S.view !== 'requests') return;
   if (ev.key === 'Escape') { if (typing) document.activeElement.blur(); else select(null); return; }
@@ -4036,6 +4297,10 @@ $('#btn-settings').onclick = () => { renderSettings(); show('settings'); };
 $('#settings-file').onchange = ev => { const f = ev.target.files[0]; ev.target.value = ''; if (f) importSettingsFile(f); };
 loadStoredSettings();
 $('#btn-settings').classList.toggle('on', settingsCount() > 0);
+let decT; $('#dec-in').addEventListener('input', () => { clearTimeout(decT); decT = setTimeout(runDecode, 150); });
+$('#dec-close').onclick = () => $('#dlg-decode').close();
+$('#diff-with').addEventListener('change', renderDiff);
+$('#diff-close').onclick = () => $('#dlg-diff').close();
 </script>
 </body>
 </html>

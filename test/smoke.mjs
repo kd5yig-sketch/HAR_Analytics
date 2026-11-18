@@ -113,7 +113,11 @@ await step('shows formatted JSON bodies, request payloads and image previews', a
   await page.click('#detail .dtabs button[data-tab="payload"]');
   assert.match(await page.textContent('#detail .dbody'), /"password": "hunter2"/);
   await page.click('#detail .dtabs button[data-tab="response"]');
+  await page.waitForSelector('#detail .dbody .jtree');
+  assert.match(await page.textContent('#detail .dbody .jtree'), /"access_token": /);
+  await page.click('#detail .bmode button[data-mode="raw"]');
   assert.match(await page.textContent('#detail .dbody'), /JSON \(formatted\)/);
+  await page.click('#detail .bmode button[data-mode="tree"]');
   await filterTo('logo.png', 'logo.png');
   await page.click('#rows .row');
   await page.click('#detail .dtabs button[data-tab="response"]');

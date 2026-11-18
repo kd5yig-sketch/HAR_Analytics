@@ -6,7 +6,7 @@ import { readFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import assert from 'node:assert/strict';
-import { inflateRawSync } from 'node:zlib';
+import { inflateRawSync, gzipSync } from 'node:zlib';
 
 const { chromium } = createRequire(import.meta.url)('playwright');
 const here = dirname(fileURLToPath(import.meta.url));
@@ -184,6 +184,73 @@ await step('sharing: the case bundle contains every file and no secrets or perso
   assert.match(files['notes.md'], /★ #2 POST https:\/\/checkout\.example-store\.com\/api\/checkout/);
   assert.match(files['notes.md'], /Customer says the order failed here/);
   JSON.parse(files['personal-data-redacted.har']);
+});
+
+const selectRow = async (q, expectN = 1) => {
+  await page.click('#tabs button[data-view="requests"]');
+  await page.fill('#q', q);
+  await page.waitForFunction(n => document.querySelectorAll('#rows .row').length === n, expectN);
+  await page.click('#rows .row');
+  await page.waitForSelector('#detail:not(.hidden)');
+};
+
+await step('body tools: JSON tree, path search and path errors', async () => {
+  await open('diagnostics.har');
+  await selectRow('graphql', 3);
+  await page.click('#detail .dtabs button[data-tab="response"]');
+  await page.waitForSelector('#detail .jtree');
+  assert.match(await page.textContent('#detail .jtree'), /"errors": \[1\]/);
+  await page.fill('#detail .jpath', 'errors[*].extensions.code');
+  await page.waitForFunction(() => /1 match/.test(document.querySelector('#detail .jmatches').textContent));
+  assert.match(await page.textContent('#detail .jmatches'), /\$\.errors\[0\]\.extensions\.code\s*GRAPHQL_VALIDATION_FAILED/);
+  await page.fill('#detail .jpath', 'errors[?(@.x)]');
+  await page.waitForFunction(() => /Path error: unsupported/.test(document.querySelector('#detail .jmatches').textContent));
+  await page.click('#detail .dtabs button[data-tab="payload"]');
+  assert.match(await page.textContent('#detail .jtree'), /"operationName": "GetCart"/);
+});
+
+await step('body tools: sandboxed HTML preview loads nothing from the network', async () => {
+  await selectRow('wishlist');
+  await page.click('#detail .dtabs button[data-tab="response"]');
+  await page.click('#detail .bmode button[data-mode="preview"]');
+  const fr = await page.waitForSelector('#detail iframe.hprev');
+  assert.equal(await fr.getAttribute('sandbox'), '');
+  const frame = await fr.contentFrame();
+  await frame.waitForSelector('#root', { state: 'attached' });
+  assert.equal(await frame.title(), 'Example Shop');
+  if (shots) await page.screenshot({ path: join(shots, 'html-preview.png') });
+});
+
+await step('body tools: decoder handles JWT, base64 + gzip and timestamps', async () => {
+  await page.click('#btn-decode');
+  await page.fill('#dec-in', 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1IiwiZXhwIjoxNzkzNjM1MjMwfQ.c2ln');
+  await page.waitForFunction(() => /JWT payload/.test(document.querySelector('#dec-out').textContent));
+  assert.match(await page.textContent('#dec-out'), /exp: 2026-11-02 16:00:30 UTC/);
+  await page.fill('#dec-in', gzipSync('compressed text here').toString('base64'));
+  await page.waitForFunction(() => /Base64 \+ gzip/.test(document.querySelector('#dec-out').textContent));
+  assert.match(await page.textContent('#dec-out'), /compressed text here/);
+  await page.fill('#dec-in', '1793635230');
+  await page.waitForFunction(() => /Unix time \(seconds\)/.test(document.querySelector('#dec-out').textContent));
+  await page.click('#dec-close');
+});
+
+await step('body tools: compare responses (JSON structure and headers)', async () => {
+  await selectRow('v1/search', 2);
+  await page.click('#btn-diff');
+  await page.waitForSelector('#dlg-diff[open] #diff-out h4');
+  const t = await page.textContent('#diff-out');
+  assert.match(t, /The JSON bodies are identical|identical/);
+  assert.match(t, /retry-after\s*30\s*28/);
+  await page.click('#diff-close');
+  await selectRow('graphql', 3);
+  await page.click('#btn-diff');
+  const opts = await page.$$eval('#diff-with option', o => o.map(x => x.textContent));
+  assert.ok(opts.length >= 2 && /graphql/.test(opts[0]), 'same-endpoint requests should be offered first');
+  await page.selectOption('#diff-with', { index: 1 });
+  await page.waitForFunction(() => /\$\.data/.test(document.querySelector('#diff-out').textContent));
+  if (shots) await page.screenshot({ path: join(shots, 'diff.png') });
+  await page.click('#diff-close');
+  await page.fill('#q', '');
 });
 
 await step('no network requests and no errors', async () => {

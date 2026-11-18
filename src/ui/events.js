@@ -43,7 +43,7 @@ $('#rows').onclick = ev => { const r = ev.target.closest('.row'); if (r) select(
 
 document.addEventListener('keydown', ev => {
   const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement && document.activeElement.tagName);
-  if ($('#dlg-export').open) return;
+  if ($('#dlg-export').open || $('#dlg-decode').open || $('#dlg-diff').open) return;
   if (ev.key === '/' && !typing && S.entries.length) { ev.preventDefault(); show('requests'); $('#q').focus(); return; }
   if (S.view !== 'requests') return;
   if (ev.key === 'Escape') { if (typing) document.activeElement.blur(); else select(null); return; }
@@ -69,3 +69,7 @@ $('#btn-settings').onclick = () => { renderSettings(); show('settings'); };
 $('#settings-file').onchange = ev => { const f = ev.target.files[0]; ev.target.value = ''; if (f) importSettingsFile(f); };
 loadStoredSettings();
 $('#btn-settings').classList.toggle('on', settingsCount() > 0);
+let decT; $('#dec-in').addEventListener('input', () => { clearTimeout(decT); decT = setTimeout(runDecode, 150); });
+$('#dec-close').onclick = () => $('#dlg-decode').close();
+$('#diff-with').addEventListener('change', renderDiff);
+$('#diff-close').onclick = () => $('#dlg-diff').close();

@@ -261,3 +261,22 @@ dialog { max-width: 640px; }
 .note-text { width: 100%; margin-top: 8px; font: inherit; font-size: 12px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
 button.star { font-size: 15px; line-height: 1; } button.star.on { color: #d29e00; border-color: #d29e00; }
 .nmark { color: #d29e00; }
+
+/* Body tools */
+.btool { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0 8px; }
+.bmode { display: inline-flex; gap: 4px; } .bmode .chip.on { background: var(--accent-soft); border-color: var(--accent); }
+.jpath { flex: 1 1 260px; min-width: 0; font-family: var(--mono); font-size: 12px; }
+.jtree { font-family: var(--mono); font-size: 12px; background: var(--panel-2); border-radius: 6px; padding: 8px 10px; overflow-x: auto; user-select: text; }
+.jtree details > summary { cursor: pointer; list-style: none; } .jtree details > summary::before { content: '▸ '; color: var(--muted); } .jtree details[open] > summary::before { content: '▾ '; }
+.jkids { padding-left: 16px; border-left: 1px dotted var(--border); margin-left: 4px; }
+.jrow { padding-left: 14px; white-space: pre-wrap; word-break: break-all; }
+.jk { color: var(--info); } .jsum { color: var(--muted); }
+.j-string { color: var(--ok); } .j-number { color: var(--accent); } .j-boolean { color: var(--warn); } .j-null { color: var(--muted); }
+.jmatches .kv { margin-bottom: 10px; }
+iframe.hprev { width: 100%; height: 420px; border: 1px solid var(--border); border-radius: 6px; background: #fff; }
+dialog.wide { max-width: 980px; width: calc(100% - 32px); }
+#dec-in { width: 100%; font-family: var(--mono); font-size: 12px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
+#dec-out, #diff-out { max-height: 60vh; overflow: auto; margin-top: 10px; }
+.decres { margin-bottom: 10px; } .decres pre.body { max-height: 260px; overflow: auto; margin: 4px 0; }
+.ldiff { font-family: var(--mono); font-size: 12px; background: var(--panel-2); border-radius: 6px; padding: 6px; }
+.dl { white-space: pre-wrap; word-break: break-all; } .dl.add { background: color-mix(in srgb, var(--ok) 18%, transparent); } .dl.del { background: var(--err-soft); } .dl.skip { color: var(--muted); font-style: italic; }
