@@ -322,3 +322,6 @@ svg.seq .mtext { fill: var(--text); font-size: 11px; } svg.seq .bad .mtext { fil
 svg.seq .msg { cursor: pointer; } svg.seq .msg:hover .mtext, svg.seq .msg:focus .mtext { text-decoration: underline; } svg.seq .msg:focus { outline: none; }
 svg.seq .note { fill: var(--panel-2); } svg.seq .note.bad { fill: var(--err-soft); } svg.seq .ntext { fill: var(--text); font-size: 11px; } svg.seq .ntext.bad { fill: var(--err); }
 .seq-toggle.on { background: var(--accent-soft); border-color: var(--accent); }
+
+/* version next to the title */
+h1 .ver { font-size: 11px; font-weight: 500; color: var(--muted); margin-left: 6px; vertical-align: middle; }

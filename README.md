@@ -8,8 +8,9 @@ cloud. The same analysis also runs from the [command line](#command-line) for sc
 
 ## Quick start
 
-1. Download [`har-analyzer.html`](har-analyzer.html). On its page, use the "Download raw
-   file" button, or clone this repository.
+1. Download `har-analyzer-<version>.html` from the latest
+   [release](https://github.com/kd5yig-sketch/HAR_Analytics/releases) (or
+   [`har-analyzer.html`](har-analyzer.html) from this repository for the newest build).
 2. Open it in Chrome, Edge, Firefox or Safari by double-clicking it.
 3. Drag a `.har` file (or a Chrome NetLog `.json`) onto the page, or click **Open HAR…**.
 
@@ -328,7 +329,9 @@ node cli/har-analytics.mjs e2e-run.har --settings team-settings.json --fail-on e
 | `--recursive`, `--quiet` | Look into subfolders; print only errors |
 
 Inputs can be HAR files, NetLogs, or folders of either. Exit codes: 0 done, 2 problems found at
-the `--fail-on` level, 1 usage or input error. `npm install -g .` installs it as `har-analytics`.
+the `--fail-on` level, 1 usage or input error. To install it as `har-analytics`, download the
+`.tgz` from a [release](https://github.com/kd5yig-sketch/HAR_Analytics/releases) and run
+`npm install -g ./har-analytics-<version>.tgz` (or `npm install -g .` in a clone).
 
 ## Capturing a HAR
 
@@ -352,6 +355,11 @@ npm run build
 ```
 
 `npm run check` (part of `npm test`) fails if `har-analyzer.html` is out of date.
+
+To release, set the version in `package.json`, add a `## v<version>` section to
+[`CHANGELOG.md`](CHANGELOG.md), build, and push a tag `v<version>`. The Release workflow runs
+the tests and publishes the HTML file, the CLI package and checksums (tags with a `-beta.N`
+style suffix become pre-releases).
 
 The analysis in `src/core/` uses no DOM, so the command line runs the very same code under Node.
 Large files stay usable: lookups are indexed, long lists render a page at a time, and a

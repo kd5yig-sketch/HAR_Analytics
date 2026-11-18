@@ -24,7 +24,8 @@ export function build() {
   if (!tpl.includes('/*__STYLES__*/') || !tpl.includes('/*__SCRIPTS__*/')) throw new Error('src/index.html is missing a placeholder');
   if (/<\/script/i.test(js)) throw new Error('a source file contains "</script", which would end the inline script early');
   // Function replacements so "$&"-style patterns in the sources are not interpreted.
-  return tpl.replace('/*__STYLES__*/', () => css.trimEnd()).replace('/*__SCRIPTS__*/', () => js.trimEnd());
+  const version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
+  return tpl.replace('/*__STYLES__*/', () => css.trimEnd()).replace('/*__SCRIPTS__*/', () => js.trimEnd()).replaceAll('__VERSION__', version);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
