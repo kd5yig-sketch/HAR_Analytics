@@ -503,17 +503,6 @@ function detailTab(e, tab) {
 }
 
 function exportCsv() { download(S.fileName.replace(/\.(har|json)$/i, '') + '-requests.csv', csvText(S.filtered), 'text/csv'); }
-function csvText(list) {
-  const cols = ['#', 'started_ms', 'method', 'status', 'status_text', 'url', 'domain', 'type', 'mime', 'transfer_bytes', 'content_bytes', 'time_ms', 'blocked_ms', 'dns_ms', 'connect_ms', 'tls_ms', 'send_ms', 'wait_ms', 'receive_ms', 'http_version', 'server_ip', 'error', 'findings'];
-  const lines = [cols.join(',')];
-  for (const e of list) {
-    const t = e.timings;
-    lines.push([e.i, Math.round(e.start), e.method, e.status, e.statusText, e.url, e.host, TYPE_LABEL[e.type], e.mime, e.transfer, e.contentSize, e.time.toFixed(1),
-      t.blocked.toFixed(1), t.dns.toFixed(1), t.tcp.toFixed(1), t.ssl.toFixed(1), t.send.toFixed(1), t.wait.toFixed(1), t.receive.toFixed(1),
-      e.httpVersion, e.serverIP, e.error, e.findings.map(f => RULES[f.code].title).join('; ')].map(csvCell).join(','));
-  }
-  return lines.join('\r\n');
-}
 
 /* ======================================================================
    Authentication analysis

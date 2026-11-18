@@ -73,3 +73,16 @@ function compareHars(A, B) {
   r.sumA = sum(A); r.sumB = sum(B);
   return r;
 }
+// Markdown version of the comparison (used by the command-line tool).
+function compareReport(r, nameA, nameB) {
+  const L = ['# Comparison report', '', '- A: ' + nameA, '- B: ' + nameB, '- Generated locally by HAR Analytics. Tokens, passwords, cookie values and keys are removed.', '', '## What changed (most likely to matter first)', ''];
+  if (!r.explain.length) L.push('The same requests got the same results.');
+  r.explain.slice(0, 40).forEach((x, k) => L.push((k + 1) + '. ' + x.text));
+  L.push('', '## Summary', '', '| | A | B |', '|---|---|---|');
+  for (const [label, k, f] of [['Requests', 'req'], ['Failed (no response)', 'failed'], ['HTTP 4xx / 5xx', 'http'], ['Transferred', 'bytes', fmtBytes], ['First request → last byte', 'span', fmtMs]]) L.push('| ' + label + ' | ' + (f ? f(r.sumA[k]) : r.sumA[k]) + ' | ' + (f ? f(r.sumB[k]) : r.sumB[k]) + ' |');
+  if (r.changed.length) { L.push('', '## Different status codes', ''); for (const c of r.changed) L.push('- ' + c.k + ': A ' + fmtStatuses(c.sa) + ', B ' + fmtStatuses(c.sb)); }
+  if (r.hdr.length) { L.push('', '## Header and server differences', ''); for (const x of r.hdr.slice(0, 25)) { L.push('### ' + x.k, ''); for (const [l, a, b] of x.d) L.push('- ' + l + ': A `' + a + '` → B `' + b + '`'); L.push(''); } }
+  if (r.onlyA.length) { L.push('', '## Only in A', ''); for (const x of r.onlyA.slice(0, 80)) L.push('- ' + x.k + ' (' + fmtStatuses(statusSet(x.a)) + ')'); }
+  if (r.onlyB.length) { L.push('', '## Only in B', ''); for (const x of r.onlyB.slice(0, 80)) L.push('- ' + x.k + ' (' + fmtStatuses(statusSet(x.b)) + ')'); }
+  return scrub(L.join('\n').replace(/https?:\/\/[^\s`)]+/g, u => redactUrl(u))) + '\n';
+}

@@ -860,6 +860,18 @@ const sameUrl = e => idx().byUrl.get(String(e.url).split(/[?#]/)[0]) || [];
 // Index of the first element whose key >= v in an array sorted by key.
 function lowerBound(arr, v, key) { let lo = 0, hi = arr.length; while (lo < hi) { const mid = (lo + hi) >> 1; if ((key ? key(arr[mid]) : arr[mid]) < v) lo = mid + 1; else hi = mid; } return lo; }
 
+function csvText(list) {
+  const cols = ['#', 'started_ms', 'method', 'status', 'status_text', 'url', 'domain', 'type', 'mime', 'transfer_bytes', 'content_bytes', 'time_ms', 'blocked_ms', 'dns_ms', 'connect_ms', 'tls_ms', 'send_ms', 'wait_ms', 'receive_ms', 'http_version', 'server_ip', 'error', 'findings'];
+  const lines = [cols.join(',')];
+  for (const e of list) {
+    const t = e.timings;
+    lines.push([e.i, Math.round(e.start), e.method, e.status, e.statusText, e.url, e.host, TYPE_LABEL[e.type], e.mime, e.transfer, e.contentSize, e.time.toFixed(1),
+      t.blocked.toFixed(1), t.dns.toFixed(1), t.tcp.toFixed(1), t.ssl.toFixed(1), t.send.toFixed(1), t.wait.toFixed(1), t.receive.toFixed(1),
+      e.httpVersion, e.serverIP, e.error, e.findings.map(f => RULES[f.code].title).join('; ')].map(csvCell).join(','));
+  }
+  return lines.join('\r\n');
+}
+
 // ---- src/core/xml.js ----
 /* ---------- minimal XML reader ----------
    Used where DOMParser is not available (the command-line tool under Node).
@@ -2889,6 +2901,19 @@ function compareHars(A, B) {
   r.sumA = sum(A); r.sumB = sum(B);
   return r;
 }
+// Markdown version of the comparison (used by the command-line tool).
+function compareReport(r, nameA, nameB) {
+  const L = ['# Comparison report', '', '- A: ' + nameA, '- B: ' + nameB, '- Generated locally by HAR Analytics. Tokens, passwords, cookie values and keys are removed.', '', '## What changed (most likely to matter first)', ''];
+  if (!r.explain.length) L.push('The same requests got the same results.');
+  r.explain.slice(0, 40).forEach((x, k) => L.push((k + 1) + '. ' + x.text));
+  L.push('', '## Summary', '', '| | A | B |', '|---|---|---|');
+  for (const [label, k, f] of [['Requests', 'req'], ['Failed (no response)', 'failed'], ['HTTP 4xx / 5xx', 'http'], ['Transferred', 'bytes', fmtBytes], ['First request → last byte', 'span', fmtMs]]) L.push('| ' + label + ' | ' + (f ? f(r.sumA[k]) : r.sumA[k]) + ' | ' + (f ? f(r.sumB[k]) : r.sumB[k]) + ' |');
+  if (r.changed.length) { L.push('', '## Different status codes', ''); for (const c of r.changed) L.push('- ' + c.k + ': A ' + fmtStatuses(c.sa) + ', B ' + fmtStatuses(c.sb)); }
+  if (r.hdr.length) { L.push('', '## Header and server differences', ''); for (const x of r.hdr.slice(0, 25)) { L.push('### ' + x.k, ''); for (const [l, a, b] of x.d) L.push('- ' + l + ': A `' + a + '` → B `' + b + '`'); L.push(''); } }
+  if (r.onlyA.length) { L.push('', '## Only in A', ''); for (const x of r.onlyA.slice(0, 80)) L.push('- ' + x.k + ' (' + fmtStatuses(statusSet(x.a)) + ')'); }
+  if (r.onlyB.length) { L.push('', '## Only in B', ''); for (const x of r.onlyB.slice(0, 80)) L.push('- ' + x.k + ' (' + fmtStatuses(statusSet(x.b)) + ')'); }
+  return scrub(L.join('\n').replace(/https?:\/\/[^\s`)]+/g, u => redactUrl(u))) + '\n';
+}
 
 // ---- src/core/bodytools.js ----
 /* ---------- body tools: path search, decoders, diffs ---------- */
@@ -4256,17 +4281,6 @@ function detailTab(e, tab) {
 }
 
 function exportCsv() { download(S.fileName.replace(/\.(har|json)$/i, '') + '-requests.csv', csvText(S.filtered), 'text/csv'); }
-function csvText(list) {
-  const cols = ['#', 'started_ms', 'method', 'status', 'status_text', 'url', 'domain', 'type', 'mime', 'transfer_bytes', 'content_bytes', 'time_ms', 'blocked_ms', 'dns_ms', 'connect_ms', 'tls_ms', 'send_ms', 'wait_ms', 'receive_ms', 'http_version', 'server_ip', 'error', 'findings'];
-  const lines = [cols.join(',')];
-  for (const e of list) {
-    const t = e.timings;
-    lines.push([e.i, Math.round(e.start), e.method, e.status, e.statusText, e.url, e.host, TYPE_LABEL[e.type], e.mime, e.transfer, e.contentSize, e.time.toFixed(1),
-      t.blocked.toFixed(1), t.dns.toFixed(1), t.tcp.toFixed(1), t.ssl.toFixed(1), t.send.toFixed(1), t.wait.toFixed(1), t.receive.toFixed(1),
-      e.httpVersion, e.serverIP, e.error, e.findings.map(f => RULES[f.code].title).join('; ')].map(csvCell).join(','));
-  }
-  return lines.join('\r\n');
-}
 
 /* ======================================================================
    Authentication analysis
