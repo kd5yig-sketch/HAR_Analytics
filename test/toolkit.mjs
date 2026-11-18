@@ -272,7 +272,7 @@ await step('copy as: every format is offered and copies runnable code', async ()
   assert.match(copied.fetch, /await fetch\("https:\/\/api\.example\.com\/v1\/orders", \{\n  method: "GET"/);
   assert.match(copied.powershell, /Invoke-WebRequest -Uri 'https:\/\/api\.example\.com\/v1\/orders'/);
   assert.match(copied.python, /requests\.request\(\n    "GET",/);
-  assert.match(copied.httpie, /^http \\\n  GET \\\n  'https:/);
+  assert.match(copied.httpie, /^http --ignore-stdin \\\n  GET \\\n  'https:/);
   assert.match(copied.wget, /^wget --quiet --output-document=- --method=GET/);
   assert.ok(!(await page.isVisible('#copy-menu')), 'menu closes after copying');
 });

@@ -42,16 +42,16 @@ for (const [name, bin, fn, opt = {}] of cases) {
   if (!(await has(bin))) { console.log('  - ' + name + ': skipped (' + bin + ' not installed)'); skipped++; continue; }
   last = null;
   try { await fn(); } catch (err) { if (/No module named/.test(String(err.stderr))) { console.log('  - ' + name + ': skipped (module not installed)'); skipped++; continue; } console.log('  ✗ ' + name + ': ' + String(err.stderr || err.message).slice(0, 300)); failed++; continue; }
-  const wantUrl = opt.decodedUrl ? path.replace('%27', "'") : path;
+  const wantUrls = opt.decodedUrl ? [path, path.replace('%27', "'")] : [path]; // wget 1.x decodes %27, wget2 does not
   const problems = [];
   if (!last) problems.push('no request received');
   else {
     if (last.method !== 'PUT') problems.push('method ' + last.method);
-    if (last.url !== wantUrl) problems.push('url ' + last.url);
+    if (!wantUrls.includes(last.url)) problems.push('url ' + last.url);
     if (last.headers['x-quote'] !== quote) problems.push('X-Quote ' + last.headers['x-quote']);
     if (last.headers.authorization !== 'Bearer abc.def.ghi') problems.push('Authorization');
     if (!String(last.headers['content-type']).startsWith('application/json')) problems.push('Content-Type ' + last.headers['content-type']);
-    if (last.headers['accept-language'] !== 'fr-CA,fr;q=0.9') problems.push('Accept-Language');
+    if (String(last.headers['accept-language']).replace(/\s+/g, '') !== 'fr-CA,fr;q=0.9') problems.push('Accept-Language ' + JSON.stringify(last.headers['accept-language'])); // .NET re-formats it as "fr-CA, fr; q=0.9" (same meaning)
     if (last.body !== body) problems.push('body ' + JSON.stringify(last.body).slice(0, 120));
   }
   if (problems.length) { console.log('  ✗ ' + name + ': ' + problems.join('; ')); failed++; } else { console.log('  ✓ ' + name + ' replays the request exactly'); passed++; }

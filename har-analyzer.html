@@ -3145,7 +3145,7 @@ function toPython(e) {
   return L.join('\n');
 }
 function toHttpie(e) {
-  const c = copyParts(e), parts = ['http'];
+  const c = copyParts(e), parts = ['http --ignore-stdin']; // without it HTTPie reads stdin in scripts and CI and refuses --raw
   if (c.body != null) parts.push('--raw ' + shq(c.body));
   else if (c.form) parts.push('--form');
   parts.push(c.method, shq(c.url));
@@ -3159,7 +3159,7 @@ function toWget(e) {
   if (c.body != null) parts.push('--body-data=' + shq(c.body));
   else if (c.form) parts.push('--body-data=' + shq(new URLSearchParams(c.form).toString()));
   parts.push(shq(c.url));
-  return (/%2[1-9a-c]|%3[a-f]|%40/i.test(c.url) ? '# Note: wget decodes some percent-encoded characters in the URL (for example %27 becomes \')\n' : '') + parts.join(' \\\n  ');
+  return (/%2[1-9a-c]|%3[a-f]|%40/i.test(c.url) ? '# Note: some wget versions decode percent-encoded characters in the URL (for example %27 becomes \')\n' : '') + parts.join(' \\\n  ');
 }
 const COPY_FORMATS = [['url', 'URL', e => e.url], ['curl', 'cURL (bash)', toCurl], ['fetch', 'JavaScript fetch', toFetch], ['powershell', 'PowerShell', toPowerShell], ['python', 'Python requests', toPython], ['httpie', 'HTTPie', toHttpie], ['wget', 'wget', toWget]];
 
