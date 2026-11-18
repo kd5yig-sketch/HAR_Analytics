@@ -32,8 +32,8 @@ function renderDiag() {
       if (!list.length) return null;
       const main = list.filter(v => !v.normal && v.sev !== 'info'), notes = list.filter(v => v.normal || v.sev === 'info');
       return h('section', { id: 'dsec-' + k, class: 'dsec' }, h('h3', { text: l }),
-        main.map(v => dCard(v)),
-        notes.length ? h('details', { class: 'normals', open: main.length ? null : true }, h('summary', { text: (main.length ? 'Notes and harmless items' : 'Notes') + ' (' + notes.length + ')' }), notes.map(v => dCard(v))) : null);
+        capped(main, v => dCard(v)),
+        notes.length ? h('details', { class: 'normals', open: main.length ? null : true }, h('summary', { text: (main.length ? 'Notes and harmless items' : 'Notes') + ' (' + notes.length + ')' }), capped(notes, v => dCard(v))) : null);
     }),
     real.length ? null : h('p', { class: 'muted', text: 'Nothing to report.' })));
 }

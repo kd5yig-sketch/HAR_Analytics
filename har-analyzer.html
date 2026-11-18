@@ -244,6 +244,13 @@ dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top
   .c-domain, .c-type, .c-wf { display: none; }
   .toolbar #q { width: 100%; }
 }
+
+/* Loading overlay and "show more" */
+#loading { position: fixed; inset: 0; background: color-mix(in srgb, var(--bg) 70%, transparent); display: flex; align-items: center; justify-content: center; z-index: 20; }
+#loading .lbox { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 18px 22px; display: flex; gap: 12px; align-items: center; box-shadow: 0 6px 24px rgba(0,0,0,.15); max-width: calc(100% - 32px); }
+#loading .spin { width: 18px; height: 18px; border: 3px solid var(--accent-soft); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.more-btn { display: block; margin: 4px 0 12px; }
 </style>
 </head>
 <body>
@@ -350,6 +357,7 @@ dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top
   </div>
 </dialog>
 <div id="toast"></div>
+<div id="loading" class="hidden" role="status" aria-live="polite"><div class="lbox"><div class="spin"></div><div id="loading-text">Loading…</div></div></div>
 
 <script>
 'use strict';
@@ -498,7 +506,7 @@ const SEV_ORDER = { error: 0, warn: 1, info: 2 };
 function pageUrlFor(e) {
   const p = S.pages.find(p => p.id === e.pageref);
   if (p && /^https?:\/\//i.test(p.title || '')) return p.title;
-  const doc = S.entries.find(x => x.type === 'doc' && (!e.pageref || x.pageref === e.pageref));
+  const I = idx(), doc = e.pageref ? I.docByPage.get(e.pageref) : I.byTime.find(x => x.type === 'doc');
   return doc ? doc.url : '';
 }
 
@@ -681,6 +689,28 @@ function buildRedacted(opts) {
   return har;
 }
 function csvCell(v) { v = v == null ? '' : String(v); return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
+
+/* ---------- lookup indexes (built once per loaded file) ---------- */
+// Several checks need "requests to the same URL / host near this one". Scanning
+// S.entries for every request is quadratic, which is too slow for large HARs.
+const IDX = { of: null };
+function idx() {
+  if (IDX.of === S.entries) return IDX;
+  const byTime = [...S.entries].sort((a, b) => a.start - b.start);
+  const byUrl = new Map(), byHost = new Map(), okHosts = new Set(), okStarts = [], docByPage = new Map();
+  for (const e of byTime) {
+    const k = String(e.url).split(/[?#]/)[0];
+    if (!byUrl.has(k)) byUrl.set(k, []); byUrl.get(k).push(e);
+    if (!byHost.has(e.host)) byHost.set(e.host, []); byHost.get(e.host).push(e);
+    if (e.status > 0) { okHosts.add(e.host); okStarts.push(e.start); }
+    if (e.type === 'doc' && !docByPage.has(e.pageref)) docByPage.set(e.pageref, e);
+  }
+  Object.assign(IDX, { of: S.entries, byTime, byUrl, byHost, okHosts, okStarts, docByPage });
+  return IDX;
+}
+const sameUrl = e => idx().byUrl.get(String(e.url).split(/[?#]/)[0]) || [];
+// Index of the first element whose key >= v in an array sorted by key.
+function lowerBound(arr, v, key) { let lo = 0, hi = arr.length; while (lo < hi) { const mid = (lo + hi) >> 1; if ((key ? key(arr[mid]) : arr[mid]) < v) lo = mid + 1; else hi = mid; } return lo; }
 
 // ---- src/core/xml.js ----
 /* ---------- minimal XML reader ----------
@@ -1526,7 +1556,7 @@ function noCredCauses(e, add) {
   const prev = e.redirectFrom;
   const crossRedirect = prev && prev.u && e.u && prev.u.origin !== e.u.origin;
   if (crossRedirect && prev.auth && prev.auth.creds.some(c => c.header === 'Authorization')) add('high', 'header_dropped_redirect', 'The Authorization header was dropped on a cross-origin redirect', '#' + prev.i + ' to ' + prev.u.origin + ' carried ' + credLabel(prev.auth.creds.filter(c => c.header === 'Authorization')) + ' and was redirected to ' + e.u.origin + '. Browsers and most HTTP clients remove the Authorization header when a redirect leaves the original origin, so this request arrived without credentials.', ['Call the final URL directly with the token, or have the first server return the content instead of redirecting.', 'If the redirect target is meant to work without the header, give it its own credential (for example a short-lived signed URL).']);
-  const earlier = S.entries.filter(x => x.host === e.host && x.start < e.start && x.auth && x.auth.creds.some(c => c.header === 'Authorization' && !c.proxy));
+  const earlier = (idx().byHost.get(e.host) || []).filter(x => x.start < e.start && x.auth && x.auth.creds.some(c => c.header === 'Authorization' && !c.proxy));
   if (earlier.length && !crossRedirect) {
     const last = earlier[earlier.length - 1], m = last.auth.creds.find(c => c.header === 'Authorization');
     add('likely', 'header_missing', 'This request did not carry the Authorization header that earlier requests used', earlier.length + ' earlier request(s) to ' + e.host + ' sent ' + m.method + ' (most recently #' + last.i + '); this one sent none.', ['Check that the HTTP client or interceptor attaches the token to this call (URL filters, a second client instance, a call made before the token was loaded).', 'Requests made by <img>, <a>, <form>, window.open, EventSource or WebSocket cannot carry an Authorization header; use a cookie or a signed URL for those.']);
@@ -1576,7 +1606,7 @@ function credCauses(c, e, add, mode, err) {
 }
 function findRetry(e) {
   const u = noQuery(e.url);
-  return S.entries.find(x => x !== e && x.start > e.start && x.start - e.start < 300000 && x.method === e.method && noQuery(x.url) === u);
+  return sameUrl(e).find(x => x !== e && x.start > e.start && x.start - e.start < 300000 && x.method === e.method && noQuery(x.url) === u);
 }
 function classifyAuth(e) {
   const req = e.raw.request || {}, a = e.auth || { creds: [], ch: [], pch: [] };
@@ -1686,7 +1716,7 @@ function classifyAuth(e) {
   }
   causes.sort((x, y) => CONF_ORDER[x.conf] - CONF_ORDER[y.conf]);
   let recovered = null;
-  if (!normal) recovered = S.entries.find(x => x.start > e.start && x.start - e.start < 600000 && x.method === e.method && noQuery(x.url) === noQuery(e.url) && x.status >= 200 && x.status < 300) || null;
+  if (!normal) recovered = sameUrl(e).find(x => x.start > e.start && x.start - e.start < 600000 && x.method === e.method && noQuery(x.url) === noQuery(e.url) && x.status >= 200 && x.status < 300) || null;
   return { e, kind, headline, causes, evidence, sent: credLabel(sent), expected: a.ch.length ? a.ch.map(challengeText).join(' | ') : a.pch.length ? a.pch.map(challengeText).join(' | ') : '', normal, recovered };
 }
 
@@ -1832,8 +1862,8 @@ function stackTrace(text) {
 
 /* ---------- CORS ---------- */
 const corsList = v => String(v || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-function findActual(pre) { const m = hdr(reqH(pre), 'access-control-request-method').toUpperCase(); return S.entries.find(x => x !== pre && x.start >= pre.start && x.start - pre.start < 10000 && x.method === m && noQuery(x.url) === noQuery(pre.url)) || null; }
-function findPreflight(e) { return S.entries.filter(x => x !== e && x.method === 'OPTIONS' && x.start <= e.start && e.start - x.start < 10000 && noQuery(x.url) === noQuery(e.url) && hdr(reqH(x), 'access-control-request-method').toUpperCase() === e.method).pop() || null; }
+function findActual(pre) { const m = hdr(reqH(pre), 'access-control-request-method').toUpperCase(); return sameUrl(pre).find(x => x !== pre && x.start >= pre.start && x.start - pre.start < 10000 && x.method === m && noQuery(x.url) === noQuery(pre.url)) || null; }
+function findPreflight(e) { return sameUrl(e).filter(x => x !== e && x.method === 'OPTIONS' && x.start <= e.start && e.start - x.start < 10000 && noQuery(x.url) === noQuery(e.url) && hdr(reqH(x), 'access-control-request-method').toUpperCase() === e.method).pop() || null; }
 function diagCors() {
   for (const e of S.entries) {
     if (!e.u) continue;
@@ -1984,7 +2014,7 @@ function diagNetwork() {
   }
   for (const g of groups.values()) {
     const info = NET_ERR[g.code], n = g.list.length, first = g.list[0], last = g.list[n - 1];
-    const hostOk = S.entries.some(x => x.host === g.host && x.status > 0);
+    const hostOk = idx().okHosts.has(g.host);
     const ev = [g.code ? 'Browser error: ' + (first.error || g.code) : 'No error text was recorded.', n > 1 ? n + ' requests to ' + g.host + ' failed this way between +' + fmtMs(first.start) + ' and +' + fmtMs(last.start) + '.' : '', g.host ? (hostOk ? 'Other requests to ' + g.host + ' succeeded, so the host was reachable at other times.' : 'No request to ' + g.host + ' succeeded in this capture.') : ''];
     if (/^CERT_|^SSL_/.test(g.code) && g.host) ev.push('Inspect the certificate with: openssl s_client -connect ' + (first.u ? first.u.hostname + ':' + (first.u.port || 443) : g.host) + ' -servername ' + (first.u ? first.u.hostname : g.host));
     let causes, sev, normal = false, title;
@@ -1997,7 +2027,7 @@ function diagNetwork() {
   for (let i = 0; i < bad.length;) {
     let j = i; while (j + 1 < bad.length && bad[j + 1].start - bad[i].start <= 15000) j++;
     const win = bad.slice(i, j + 1), hosts = new Set(win.map(x => x.host));
-    const okInside = S.entries.some(x => x.status > 0 && x.start >= win[0].start && x.start <= win[win.length - 1].start + 1);
+    const ok = idx().okStarts, at = lowerBound(ok, win[0].start), okInside = at < ok.length && ok[at] <= win[win.length - 1].start + 1;
     if (hosts.size >= 3 && !okInside) {
       dAdd('network', 'error', win[0], 'Network outage: ' + win.length + ' requests to ' + hosts.size + ' hosts failed within ' + fmtDelta(win[win.length - 1].start - win[0].start), [C('high', 'net_outage', 'The client’s network connection dropped', 'Requests to unrelated hosts (' + [...hosts].slice(0, 5).join(', ') + ') failed at the same time and nothing succeeded in between, so the problem is on the client side (Wi-Fi, VPN, proxy, or local firewall), not on any one server.', ['Check the Wi-Fi / VPN / proxy at ' + fmtDate(entryTime(win[0])) + '.'])], [], win);
       i = j + 1;
@@ -2106,11 +2136,11 @@ function diagRateLimit() {
     if (!limited) continue;
     const ev = [], wait = parseRetryAfter(ra, e);
     for (const n of ['retry-after', 'x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset', 'ratelimit-limit', 'ratelimit-remaining', 'ratelimit-reset', 'ratelimit-policy', 'ratelimit', 'x-rate-limit-limit', 'x-rate-limit-remaining', 'x-rate-limit-reset', 'x-ms-ratelimit-remaining-subscription-reads', 'x-ms-ratelimit-remaining-subscription-writes']) { const v = hdr(H, n); if (v) ev.push(n + ': ' + v); }
-    const recent = S.entries.filter(x => x.host === e.host && x.start <= e.start && e.start - x.start <= 60000);
+    const hl = idx().byHost.get(e.host) || [], recent = hl.slice(lowerBound(hl, e.start - 60000, x => x.start), lowerBound(hl, e.start + 0.001, x => x.start));
     ev.push(recent.length + ' requests to ' + e.host + ' in the 60 s up to this one (' + recent.filter(x => x.u && x.u.pathname === e.u.pathname).length + ' to this path).');
     const msg = msgOf(errorInfo(e)); if (msg) ev.push('Server said: "' + msg.slice(0, 200) + '"');
     const causes = [C('high', 'rate_limited', 'The server is rate limiting this client' + (isFinite(wait) ? ' and asked it to wait ' + fmtDelta(wait) : ''), 'HTTP ' + e.status + ' means too many requests in a time window (per user, API key, IP or tenant).', ['Slow down: honor Retry-After, add exponential backoff with jitter, batch or cache requests, or ask for a higher quota.'])];
-    const next = S.entries.find(x => x !== e && x.start > e.start && x.method === e.method && noQuery(x.url) === noQuery(e.url));
+    const next = sameUrl(e).find(x => x !== e && x.start > e.start && x.method === e.method && noQuery(x.url) === noQuery(e.url));
     if (next && isFinite(wait) && next.start - e.start < wait - 500) causes.push(C('high', 'retry_too_early', 'The client retried after ' + fmtDelta(next.start - e.start) + ', before Retry-After (' + fmtDelta(wait) + ') had passed', 'Retrying early keeps the client throttled.', ['Wait at least the Retry-After time before retrying.']));
     dAdd('ratelimit', 'error', e, (e.status === 429 ? '429 Too Many Requests' : e.status + ' with Retry-After') + ' — ' + e.host, causes, ev, next ? [next] : []);
   }
@@ -2180,7 +2210,7 @@ function diagHidden() {
       if (j && isGql && Array.isArray(j.errors) && j.errors.length) {
         const codes = j.errors.map(x => x && x.extensions && (x.extensions.code || x.extensions.classification)).filter(Boolean);
         const apq = codes.includes('PERSISTED_QUERY_NOT_FOUND') || j.errors.some(x => /PersistedQueryNotFound/.test(x && x.message));
-        const retried = apq && S.entries.some(x => x.start > e.start && x.start - e.start < 5000 && noQuery(x.url) === noQuery(e.url) && /"query"/.test(reqBodyText(x)));
+        const retried = apq && sameUrl(e).some(x => x.start > e.start && x.start - e.start < 5000 && noQuery(x.url) === noQuery(e.url) && /"query"/.test(reqBodyText(x)));
         const op = (/"operationName"\s*:\s*"([^"]+)"/.exec(reqText) || [])[1] || e.u.searchParams.get('operationName') || '';
         const msgs = j.errors.slice(0, 4).map(x => (x && x.message ? x.message : JSON.stringify(x)) + (x && x.path ? ' (at ' + [].concat(x.path).join('.') + ')' : ''));
         const hint = codes.includes('UNAUTHENTICATED') ? ' UNAUTHENTICATED means the token or session was missing or invalid.' : codes.includes('FORBIDDEN') ? ' FORBIDDEN means the user lacks permission for a field or operation.' : codes.includes('GRAPHQL_VALIDATION_FAILED') ? ' The query does not match the server’s schema (a client/server version mismatch?).' : codes.includes('BAD_USER_INPUT') ? ' An argument value was invalid.' : codes.includes('INTERNAL_SERVER_ERROR') ? ' A resolver threw an exception on the server.' : '';
@@ -2696,20 +2726,44 @@ function download(name, text, type) {
   const a = h('a', { href: url, download: name }); document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
+// Render a long list a batch at a time: the first `n` items, then a "Show more" button.
+function capped(list, render, n = 30) {
+  const first = list.slice(0, n).map(render);
+  if (list.length <= n) return first;
+  const btn = h('button', { class: 'more-btn', text: 'Show ' + Math.min(n, list.length - n) + ' more (' + (list.length - n) + ' hidden)' });
+  btn.onclick = () => btn.replaceWith(...[].concat(capped(list.slice(n), render, n)));
+  return [...first, btn];
+}
+// Show a progress message and let the browser paint it before continuing.
+async function stage(label) {
+  const box = document.getElementById('loading');
+  if (box) { box.classList.remove('hidden'); document.getElementById('loading-text').textContent = label; }
+  await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+}
+function stageDone() { const box = document.getElementById('loading'); if (box) box.classList.add('hidden'); }
 
 // ---- src/ui/app.js ----
 async function loadText(text, name) {
-  CMP.b = null;
   $('#loaderr').textContent = '';
+  await stage('Reading ' + name + ' (' + fmtBytes(text.length) + ')…');
   let har;
-  try { har = JSON.parse(text.replace(/^﻿/, '')); }
-  catch (err) { showLoadError('Could not read ' + name + ' as JSON.\n' + err.message); return; }
+  try { har = JSON.parse(text.replace(/^\ufeff/, '')); }
+  catch (err) { stageDone(); showLoadError('Could not read ' + name + ' as JSON.\n' + err.message); return; }
+  text = null; // let the raw text be garbage-collected; only the parsed HAR is kept
+  await loadHar(har, name);
+}
+async function loadHar(har, name) {
+  CMP.b = null;
   let n;
-  try { n = normalize(har); } catch (err) { showLoadError(err.message); return; }
-  Object.assign(S, { text, fileName: name, har, pages: n.pages, entries: n.entries, base: n.base, selected: null, types: new Set(), sort: { key: 'start', dir: 1 } });
+  try { await stage('Reading ' + name + '…'); n = normalize(har); } catch (err) { stageDone(); showLoadError(err.message); return; }
+  Object.assign(S, { fileName: name, har, pages: n.pages, entries: n.entries, base: n.base, selected: null, types: new Set(), sort: { key: 'start', dir: 1 } });
+  await stage('Finding problems in ' + n.entries.length.toLocaleString() + ' requests…');
   analyze();
+  await stage('Checking authentication…');
   try { await analyzeAuth(); } catch (err) { A.error = (err && err.message) || String(err); }
+  await stage('Diagnosing…');
   try { runDiagnostics(); } catch (err) { D.error = (err && err.message) || String(err); }
+  await stage('Drawing…');
   setupFilters();
   const creator = har.log.creator ? [har.log.creator.name, har.log.creator.version].filter(Boolean).join(' ') : '';
   $('#fileinfo').textContent = name + ' · ' + S.entries.length + ' requests' + (creator ? ' · ' + creator : '');
@@ -2725,6 +2779,7 @@ async function loadText(text, name) {
   bd.textContent = dc.length; bd.className = 'badge' + (dc.some(v => v.sev === 'error') ? ' err' : dc.length ? ' warn' : '');
   $('#btn-compare').disabled = false;
   renderOverview(); renderFindings(); renderAuth(); renderDiag(); renderCompare(); applyFilters();
+  stageDone();
   show('overview');
 }
 function showLoadError(msg) { show('empty'); $('#loaderr').textContent = msg; }
@@ -3247,10 +3302,10 @@ function renderAuth() {
         h('span', { class: 'muted', text: 'The report leaves out tokens, passwords, cookie values and keys.' }))),
     A.notes.map(n => h('div', { class: 'anote', text: n })),
     h('h3', { text: 'Failures' }),
-    fails.length ? fails.map(v => eventCard(v)) : h('p', { class: 'muted', text: 'None.' }),
-    normals.length ? h('details', { class: 'normals' }, h('summary', { text: 'Normal challenge steps (' + normals.length + ')' }), normals.map(v => eventCard(v))) : null,
+    fails.length ? capped(fails, v => eventCard(v)) : h('p', { class: 'muted', text: 'None.' }),
+    normals.length ? h('details', { class: 'normals' }, h('summary', { text: 'Normal challenge steps (' + normals.length + ')' }), capped(normals, v => eventCard(v))) : null,
     h('h3', { text: 'Sign-in flows' }),
-    A.flows.length ? A.flows.map(flowCard) : h('p', { class: 'muted', text: 'No OAuth / OpenID Connect, SAML, NTLM or Kerberos exchanges found.' }),
+    A.flows.length ? capped(A.flows, flowCard) : h('p', { class: 'muted', text: 'No OAuth / OpenID Connect, SAML, NTLM or Kerberos exchanges found.' }),
     h('h3', { text: 'Authentication methods by host' }),
     A.hosts.size ? h('table', { class: 'simple' }, h('colgroup', null, h('col', { style: { width: '34%' } }), h('col')),
       h('thead', null, h('tr', null, h('th', { text: 'Host' }), h('th', { text: 'Methods (requests)' }))),
@@ -3353,8 +3408,8 @@ function renderDiag() {
       if (!list.length) return null;
       const main = list.filter(v => !v.normal && v.sev !== 'info'), notes = list.filter(v => v.normal || v.sev === 'info');
       return h('section', { id: 'dsec-' + k, class: 'dsec' }, h('h3', { text: l }),
-        main.map(v => dCard(v)),
-        notes.length ? h('details', { class: 'normals', open: main.length ? null : true }, h('summary', { text: (main.length ? 'Notes and harmless items' : 'Notes') + ' (' + notes.length + ')' }), notes.map(v => dCard(v))) : null);
+        capped(main, v => dCard(v)),
+        notes.length ? h('details', { class: 'normals', open: main.length ? null : true }, h('summary', { text: (main.length ? 'Notes and harmless items' : 'Notes') + ' (' + notes.length + ')' }), capped(notes, v => dCard(v))) : null);
     }),
     real.length ? null : h('p', { class: 'muted', text: 'Nothing to report.' })));
 }
@@ -3363,10 +3418,13 @@ function renderDiag() {
 const CMP = { b: null, text: '' };
 function loadCompare(text, name) {
   let har;
-  try { har = JSON.parse(text.replace(/^﻿/, '')); } catch (err) { toast('Could not read ' + name + ' as JSON'); return; }
+  try { har = JSON.parse(text.replace(/^\ufeff/, '')); } catch (err) { toast('Could not read ' + name + ' as JSON'); return; }
+  compareWithHar(har, name);
+}
+function compareWithHar(har, name) {
   let n; try { n = normalize(har); } catch (err) { toast(err.message); return; }
   const creator = har.log.creator ? [har.log.creator.name, har.log.creator.version].filter(Boolean).join(' ') : '';
-  CMP.b = { name, entries: n.entries, pages: n.pages, base: n.base, creator }; CMP.text = text;
+  CMP.b = { name, har, entries: n.entries, pages: n.pages, base: n.base, creator };
   for (const e of n.entries) { const r = e.raw.response || {}, loc = hdr(r.headers, 'location'); if (e.status >= 300 && e.status < 400 && loc) e.redirectTarget = absUrl(loc, e.url); }
   renderCompare(); show('compare');
 }
@@ -3388,7 +3446,7 @@ function renderCompare() {
       h('div', { class: 'vt', text: r.explain.length ? r.explain.length + ' difference' + (r.explain.length > 1 ? 's' : '') + ' that may matter' : '✓ No meaningful differences found' }),
       h('p', null, h('b', { text: 'A' }), ' = ' + S.fileName + ' (open)   ·   ', h('b', { text: 'B' }), ' = ' + B.name),
       h('div', { class: 'vbtns' },
-        h('button', { id: 'cmp-swap', onclick: async () => { const t = S.text, n = S.fileName, tb = CMP.text, nb = CMP.b.name; await loadText(tb, nb); loadCompare(t, n); }, text: 'Swap A and B' }),
+        h('button', { id: 'cmp-swap', onclick: async () => { const a = S.har, na = S.fileName, b = CMP.b.har, nb = CMP.b.name; await loadHar(b, nb); compareWithHar(a, na); }, text: 'Swap A and B' }),
         h('button', { onclick: () => $('#file2').click(), text: 'Compare with a different file…' }),
         h('button', { onclick: () => { CMP.b = null; renderCompare(); }, text: 'Clear' }))),
     h('h3', { text: 'What changed (most likely to matter first)' }),

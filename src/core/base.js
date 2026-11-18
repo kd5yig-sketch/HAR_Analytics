@@ -141,7 +141,7 @@ const SEV_ORDER = { error: 0, warn: 1, info: 2 };
 function pageUrlFor(e) {
   const p = S.pages.find(p => p.id === e.pageref);
   if (p && /^https?:\/\//i.test(p.title || '')) return p.title;
-  const doc = S.entries.find(x => x.type === 'doc' && (!e.pageref || x.pageref === e.pageref));
+  const I = idx(), doc = e.pageref ? I.docByPage.get(e.pageref) : I.byTime.find(x => x.type === 'doc');
   return doc ? doc.url : '';
 }
 
@@ -324,3 +324,25 @@ function buildRedacted(opts) {
   return har;
 }
 function csvCell(v) { v = v == null ? '' : String(v); return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
+
+/* ---------- lookup indexes (built once per loaded file) ---------- */
+// Several checks need "requests to the same URL / host near this one". Scanning
+// S.entries for every request is quadratic, which is too slow for large HARs.
+const IDX = { of: null };
+function idx() {
+  if (IDX.of === S.entries) return IDX;
+  const byTime = [...S.entries].sort((a, b) => a.start - b.start);
+  const byUrl = new Map(), byHost = new Map(), okHosts = new Set(), okStarts = [], docByPage = new Map();
+  for (const e of byTime) {
+    const k = String(e.url).split(/[?#]/)[0];
+    if (!byUrl.has(k)) byUrl.set(k, []); byUrl.get(k).push(e);
+    if (!byHost.has(e.host)) byHost.set(e.host, []); byHost.get(e.host).push(e);
+    if (e.status > 0) { okHosts.add(e.host); okStarts.push(e.start); }
+    if (e.type === 'doc' && !docByPage.has(e.pageref)) docByPage.set(e.pageref, e);
+  }
+  Object.assign(IDX, { of: S.entries, byTime, byUrl, byHost, okHosts, okStarts, docByPage });
+  return IDX;
+}
+const sameUrl = e => idx().byUrl.get(String(e.url).split(/[?#]/)[0]) || [];
+// Index of the first element whose key >= v in an array sorted by key.
+function lowerBound(arr, v, key) { let lo = 0, hi = arr.length; while (lo < hi) { const mid = (lo + hi) >> 1; if ((key ? key(arr[mid]) : arr[mid]) < v) lo = mid + 1; else hi = mid; } return lo; }

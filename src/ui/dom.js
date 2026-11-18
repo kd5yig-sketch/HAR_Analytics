@@ -33,3 +33,18 @@ function download(name, text, type) {
   const a = h('a', { href: url, download: name }); document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
+// Render a long list a batch at a time: the first `n` items, then a "Show more" button.
+function capped(list, render, n = 30) {
+  const first = list.slice(0, n).map(render);
+  if (list.length <= n) return first;
+  const btn = h('button', { class: 'more-btn', text: 'Show ' + Math.min(n, list.length - n) + ' more (' + (list.length - n) + ' hidden)' });
+  btn.onclick = () => btn.replaceWith(...[].concat(capped(list.slice(n), render, n)));
+  return [...first, btn];
+}
+// Show a progress message and let the browser paint it before continuing.
+async function stage(label) {
+  const box = document.getElementById('loading');
+  if (box) { box.classList.remove('hidden'); document.getElementById('loading-text').textContent = label; }
+  await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+}
+function stageDone() { const box = document.getElementById('loading'); if (box) box.classList.add('hidden'); }

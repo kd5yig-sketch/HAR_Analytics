@@ -231,3 +231,10 @@ dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top
   .c-domain, .c-type, .c-wf { display: none; }
   .toolbar #q { width: 100%; }
 }
+
+/* Loading overlay and "show more" */
+#loading { position: fixed; inset: 0; background: color-mix(in srgb, var(--bg) 70%, transparent); display: flex; align-items: center; justify-content: center; z-index: 20; }
+#loading .lbox { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 18px 22px; display: flex; gap: 12px; align-items: center; box-shadow: 0 6px 24px rgba(0,0,0,.15); max-width: calc(100% - 32px); }
+#loading .spin { width: 18px; height: 18px; border: 3px solid var(--accent-soft); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.more-btn { display: block; margin: 4px 0 12px; }

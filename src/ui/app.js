@@ -1,15 +1,24 @@
 async function loadText(text, name) {
-  CMP.b = null;
   $('#loaderr').textContent = '';
+  await stage('Reading ' + name + ' (' + fmtBytes(text.length) + ')…');
   let har;
-  try { har = JSON.parse(text.replace(/^﻿/, '')); }
-  catch (err) { showLoadError('Could not read ' + name + ' as JSON.\n' + err.message); return; }
+  try { har = JSON.parse(text.replace(/^\ufeff/, '')); }
+  catch (err) { stageDone(); showLoadError('Could not read ' + name + ' as JSON.\n' + err.message); return; }
+  text = null; // let the raw text be garbage-collected; only the parsed HAR is kept
+  await loadHar(har, name);
+}
+async function loadHar(har, name) {
+  CMP.b = null;
   let n;
-  try { n = normalize(har); } catch (err) { showLoadError(err.message); return; }
-  Object.assign(S, { text, fileName: name, har, pages: n.pages, entries: n.entries, base: n.base, selected: null, types: new Set(), sort: { key: 'start', dir: 1 } });
+  try { await stage('Reading ' + name + '…'); n = normalize(har); } catch (err) { stageDone(); showLoadError(err.message); return; }
+  Object.assign(S, { fileName: name, har, pages: n.pages, entries: n.entries, base: n.base, selected: null, types: new Set(), sort: { key: 'start', dir: 1 } });
+  await stage('Finding problems in ' + n.entries.length.toLocaleString() + ' requests…');
   analyze();
+  await stage('Checking authentication…');
   try { await analyzeAuth(); } catch (err) { A.error = (err && err.message) || String(err); }
+  await stage('Diagnosing…');
   try { runDiagnostics(); } catch (err) { D.error = (err && err.message) || String(err); }
+  await stage('Drawing…');
   setupFilters();
   const creator = har.log.creator ? [har.log.creator.name, har.log.creator.version].filter(Boolean).join(' ') : '';
   $('#fileinfo').textContent = name + ' · ' + S.entries.length + ' requests' + (creator ? ' · ' + creator : '');
@@ -25,6 +34,7 @@ async function loadText(text, name) {
   bd.textContent = dc.length; bd.className = 'badge' + (dc.some(v => v.sev === 'error') ? ' err' : dc.length ? ' warn' : '');
   $('#btn-compare').disabled = false;
   renderOverview(); renderFindings(); renderAuth(); renderDiag(); renderCompare(); applyFilters();
+  stageDone();
   show('overview');
 }
 function showLoadError(msg) { show('empty'); $('#loaderr').textContent = msg; }

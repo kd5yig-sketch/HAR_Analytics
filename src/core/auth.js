@@ -798,7 +798,7 @@ function noCredCauses(e, add) {
   const prev = e.redirectFrom;
   const crossRedirect = prev && prev.u && e.u && prev.u.origin !== e.u.origin;
   if (crossRedirect && prev.auth && prev.auth.creds.some(c => c.header === 'Authorization')) add('high', 'header_dropped_redirect', 'The Authorization header was dropped on a cross-origin redirect', '#' + prev.i + ' to ' + prev.u.origin + ' carried ' + credLabel(prev.auth.creds.filter(c => c.header === 'Authorization')) + ' and was redirected to ' + e.u.origin + '. Browsers and most HTTP clients remove the Authorization header when a redirect leaves the original origin, so this request arrived without credentials.', ['Call the final URL directly with the token, or have the first server return the content instead of redirecting.', 'If the redirect target is meant to work without the header, give it its own credential (for example a short-lived signed URL).']);
-  const earlier = S.entries.filter(x => x.host === e.host && x.start < e.start && x.auth && x.auth.creds.some(c => c.header === 'Authorization' && !c.proxy));
+  const earlier = (idx().byHost.get(e.host) || []).filter(x => x.start < e.start && x.auth && x.auth.creds.some(c => c.header === 'Authorization' && !c.proxy));
   if (earlier.length && !crossRedirect) {
     const last = earlier[earlier.length - 1], m = last.auth.creds.find(c => c.header === 'Authorization');
     add('likely', 'header_missing', 'This request did not carry the Authorization header that earlier requests used', earlier.length + ' earlier request(s) to ' + e.host + ' sent ' + m.method + ' (most recently #' + last.i + '); this one sent none.', ['Check that the HTTP client or interceptor attaches the token to this call (URL filters, a second client instance, a call made before the token was loaded).', 'Requests made by <img>, <a>, <form>, window.open, EventSource or WebSocket cannot carry an Authorization header; use a cookie or a signed URL for those.']);
@@ -848,7 +848,7 @@ function credCauses(c, e, add, mode, err) {
 }
 function findRetry(e) {
   const u = noQuery(e.url);
-  return S.entries.find(x => x !== e && x.start > e.start && x.start - e.start < 300000 && x.method === e.method && noQuery(x.url) === u);
+  return sameUrl(e).find(x => x !== e && x.start > e.start && x.start - e.start < 300000 && x.method === e.method && noQuery(x.url) === u);
 }
 function classifyAuth(e) {
   const req = e.raw.request || {}, a = e.auth || { creds: [], ch: [], pch: [] };
@@ -958,7 +958,7 @@ function classifyAuth(e) {
   }
   causes.sort((x, y) => CONF_ORDER[x.conf] - CONF_ORDER[y.conf]);
   let recovered = null;
-  if (!normal) recovered = S.entries.find(x => x.start > e.start && x.start - e.start < 600000 && x.method === e.method && noQuery(x.url) === noQuery(e.url) && x.status >= 200 && x.status < 300) || null;
+  if (!normal) recovered = sameUrl(e).find(x => x.start > e.start && x.start - e.start < 600000 && x.method === e.method && noQuery(x.url) === noQuery(e.url) && x.status >= 200 && x.status < 300) || null;
   return { e, kind, headline, causes, evidence, sent: credLabel(sent), expected: a.ch.length ? a.ch.map(challengeText).join(' | ') : a.pch.length ? a.pch.map(challengeText).join(' | ') : '', normal, recovered };
 }
 

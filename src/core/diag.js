@@ -42,8 +42,8 @@ function stackTrace(text) {
 
 /* ---------- CORS ---------- */
 const corsList = v => String(v || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-function findActual(pre) { const m = hdr(reqH(pre), 'access-control-request-method').toUpperCase(); return S.entries.find(x => x !== pre && x.start >= pre.start && x.start - pre.start < 10000 && x.method === m && noQuery(x.url) === noQuery(pre.url)) || null; }
-function findPreflight(e) { return S.entries.filter(x => x !== e && x.method === 'OPTIONS' && x.start <= e.start && e.start - x.start < 10000 && noQuery(x.url) === noQuery(e.url) && hdr(reqH(x), 'access-control-request-method').toUpperCase() === e.method).pop() || null; }
+function findActual(pre) { const m = hdr(reqH(pre), 'access-control-request-method').toUpperCase(); return sameUrl(pre).find(x => x !== pre && x.start >= pre.start && x.start - pre.start < 10000 && x.method === m && noQuery(x.url) === noQuery(pre.url)) || null; }
+function findPreflight(e) { return sameUrl(e).filter(x => x !== e && x.method === 'OPTIONS' && x.start <= e.start && e.start - x.start < 10000 && noQuery(x.url) === noQuery(e.url) && hdr(reqH(x), 'access-control-request-method').toUpperCase() === e.method).pop() || null; }
 function diagCors() {
   for (const e of S.entries) {
     if (!e.u) continue;
@@ -194,7 +194,7 @@ function diagNetwork() {
   }
   for (const g of groups.values()) {
     const info = NET_ERR[g.code], n = g.list.length, first = g.list[0], last = g.list[n - 1];
-    const hostOk = S.entries.some(x => x.host === g.host && x.status > 0);
+    const hostOk = idx().okHosts.has(g.host);
     const ev = [g.code ? 'Browser error: ' + (first.error || g.code) : 'No error text was recorded.', n > 1 ? n + ' requests to ' + g.host + ' failed this way between +' + fmtMs(first.start) + ' and +' + fmtMs(last.start) + '.' : '', g.host ? (hostOk ? 'Other requests to ' + g.host + ' succeeded, so the host was reachable at other times.' : 'No request to ' + g.host + ' succeeded in this capture.') : ''];
     if (/^CERT_|^SSL_/.test(g.code) && g.host) ev.push('Inspect the certificate with: openssl s_client -connect ' + (first.u ? first.u.hostname + ':' + (first.u.port || 443) : g.host) + ' -servername ' + (first.u ? first.u.hostname : g.host));
     let causes, sev, normal = false, title;
@@ -207,7 +207,7 @@ function diagNetwork() {
   for (let i = 0; i < bad.length;) {
     let j = i; while (j + 1 < bad.length && bad[j + 1].start - bad[i].start <= 15000) j++;
     const win = bad.slice(i, j + 1), hosts = new Set(win.map(x => x.host));
-    const okInside = S.entries.some(x => x.status > 0 && x.start >= win[0].start && x.start <= win[win.length - 1].start + 1);
+    const ok = idx().okStarts, at = lowerBound(ok, win[0].start), okInside = at < ok.length && ok[at] <= win[win.length - 1].start + 1;
     if (hosts.size >= 3 && !okInside) {
       dAdd('network', 'error', win[0], 'Network outage: ' + win.length + ' requests to ' + hosts.size + ' hosts failed within ' + fmtDelta(win[win.length - 1].start - win[0].start), [C('high', 'net_outage', 'The client’s network connection dropped', 'Requests to unrelated hosts (' + [...hosts].slice(0, 5).join(', ') + ') failed at the same time and nothing succeeded in between, so the problem is on the client side (Wi-Fi, VPN, proxy, or local firewall), not on any one server.', ['Check the Wi-Fi / VPN / proxy at ' + fmtDate(entryTime(win[0])) + '.'])], [], win);
       i = j + 1;
@@ -316,11 +316,11 @@ function diagRateLimit() {
     if (!limited) continue;
     const ev = [], wait = parseRetryAfter(ra, e);
     for (const n of ['retry-after', 'x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset', 'ratelimit-limit', 'ratelimit-remaining', 'ratelimit-reset', 'ratelimit-policy', 'ratelimit', 'x-rate-limit-limit', 'x-rate-limit-remaining', 'x-rate-limit-reset', 'x-ms-ratelimit-remaining-subscription-reads', 'x-ms-ratelimit-remaining-subscription-writes']) { const v = hdr(H, n); if (v) ev.push(n + ': ' + v); }
-    const recent = S.entries.filter(x => x.host === e.host && x.start <= e.start && e.start - x.start <= 60000);
+    const hl = idx().byHost.get(e.host) || [], recent = hl.slice(lowerBound(hl, e.start - 60000, x => x.start), lowerBound(hl, e.start + 0.001, x => x.start));
     ev.push(recent.length + ' requests to ' + e.host + ' in the 60 s up to this one (' + recent.filter(x => x.u && x.u.pathname === e.u.pathname).length + ' to this path).');
     const msg = msgOf(errorInfo(e)); if (msg) ev.push('Server said: "' + msg.slice(0, 200) + '"');
     const causes = [C('high', 'rate_limited', 'The server is rate limiting this client' + (isFinite(wait) ? ' and asked it to wait ' + fmtDelta(wait) : ''), 'HTTP ' + e.status + ' means too many requests in a time window (per user, API key, IP or tenant).', ['Slow down: honor Retry-After, add exponential backoff with jitter, batch or cache requests, or ask for a higher quota.'])];
-    const next = S.entries.find(x => x !== e && x.start > e.start && x.method === e.method && noQuery(x.url) === noQuery(e.url));
+    const next = sameUrl(e).find(x => x !== e && x.start > e.start && x.method === e.method && noQuery(x.url) === noQuery(e.url));
     if (next && isFinite(wait) && next.start - e.start < wait - 500) causes.push(C('high', 'retry_too_early', 'The client retried after ' + fmtDelta(next.start - e.start) + ', before Retry-After (' + fmtDelta(wait) + ') had passed', 'Retrying early keeps the client throttled.', ['Wait at least the Retry-After time before retrying.']));
     dAdd('ratelimit', 'error', e, (e.status === 429 ? '429 Too Many Requests' : e.status + ' with Retry-After') + ' — ' + e.host, causes, ev, next ? [next] : []);
   }
@@ -390,7 +390,7 @@ function diagHidden() {
       if (j && isGql && Array.isArray(j.errors) && j.errors.length) {
         const codes = j.errors.map(x => x && x.extensions && (x.extensions.code || x.extensions.classification)).filter(Boolean);
         const apq = codes.includes('PERSISTED_QUERY_NOT_FOUND') || j.errors.some(x => /PersistedQueryNotFound/.test(x && x.message));
-        const retried = apq && S.entries.some(x => x.start > e.start && x.start - e.start < 5000 && noQuery(x.url) === noQuery(e.url) && /"query"/.test(reqBodyText(x)));
+        const retried = apq && sameUrl(e).some(x => x.start > e.start && x.start - e.start < 5000 && noQuery(x.url) === noQuery(e.url) && /"query"/.test(reqBodyText(x)));
         const op = (/"operationName"\s*:\s*"([^"]+)"/.exec(reqText) || [])[1] || e.u.searchParams.get('operationName') || '';
         const msgs = j.errors.slice(0, 4).map(x => (x && x.message ? x.message : JSON.stringify(x)) + (x && x.path ? ' (at ' + [].concat(x.path).join('.') + ')' : ''));
         const hint = codes.includes('UNAUTHENTICATED') ? ' UNAUTHENTICATED means the token or session was missing or invalid.' : codes.includes('FORBIDDEN') ? ' FORBIDDEN means the user lacks permission for a field or operation.' : codes.includes('GRAPHQL_VALIDATION_FAILED') ? ' The query does not match the server’s schema (a client/server version mismatch?).' : codes.includes('BAD_USER_INPUT') ? ' An argument value was invalid.' : codes.includes('INTERNAL_SERVER_ERROR') ? ' A resolver threw an exception on the server.' : '';

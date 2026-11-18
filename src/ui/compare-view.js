@@ -1,10 +1,13 @@
 const CMP = { b: null, text: '' };
 function loadCompare(text, name) {
   let har;
-  try { har = JSON.parse(text.replace(/^﻿/, '')); } catch (err) { toast('Could not read ' + name + ' as JSON'); return; }
+  try { har = JSON.parse(text.replace(/^\ufeff/, '')); } catch (err) { toast('Could not read ' + name + ' as JSON'); return; }
+  compareWithHar(har, name);
+}
+function compareWithHar(har, name) {
   let n; try { n = normalize(har); } catch (err) { toast(err.message); return; }
   const creator = har.log.creator ? [har.log.creator.name, har.log.creator.version].filter(Boolean).join(' ') : '';
-  CMP.b = { name, entries: n.entries, pages: n.pages, base: n.base, creator }; CMP.text = text;
+  CMP.b = { name, har, entries: n.entries, pages: n.pages, base: n.base, creator };
   for (const e of n.entries) { const r = e.raw.response || {}, loc = hdr(r.headers, 'location'); if (e.status >= 300 && e.status < 400 && loc) e.redirectTarget = absUrl(loc, e.url); }
   renderCompare(); show('compare');
 }
@@ -26,7 +29,7 @@ function renderCompare() {
       h('div', { class: 'vt', text: r.explain.length ? r.explain.length + ' difference' + (r.explain.length > 1 ? 's' : '') + ' that may matter' : '✓ No meaningful differences found' }),
       h('p', null, h('b', { text: 'A' }), ' = ' + S.fileName + ' (open)   ·   ', h('b', { text: 'B' }), ' = ' + B.name),
       h('div', { class: 'vbtns' },
-        h('button', { id: 'cmp-swap', onclick: async () => { const t = S.text, n = S.fileName, tb = CMP.text, nb = CMP.b.name; await loadText(tb, nb); loadCompare(t, n); }, text: 'Swap A and B' }),
+        h('button', { id: 'cmp-swap', onclick: async () => { const a = S.har, na = S.fileName, b = CMP.b.har, nb = CMP.b.name; await loadHar(b, nb); compareWithHar(a, na); }, text: 'Swap A and B' }),
         h('button', { onclick: () => $('#file2').click(), text: 'Compare with a different file…' }),
         h('button', { onclick: () => { CMP.b = null; renderCompare(); }, text: 'Clear' }))),
     h('h3', { text: 'What changed (most likely to matter first)' }),
