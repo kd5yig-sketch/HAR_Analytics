@@ -1,11 +1,16 @@
 {
-  "name": "har-analyzer",
-  "version": "1.0.0",
+  "name": "har-analytics",
+  "version": "2.0.0",
   "description": "Offline, single-file HAR analyzer for troubleshooting HTTP/HTTPS sessions",
   "private": true,
   "type": "module",
+  "bin": {
+    "har-analytics": "cli/har-analytics.mjs"
+  },
   "scripts": {
-    "test": "node test/smoke.mjs && node test/auth.mjs && node test/diagnose.mjs",
+    "build": "node tools/build.mjs",
+    "check": "node tools/build.mjs --check",
+    "test": "npm run check && node test/smoke.mjs && node test/auth.mjs && node test/diagnose.mjs",
     "sample": "node test/make-sample.mjs && node test/make-auth-sample.mjs && node test/make-diag-samples.mjs"
   },
   "devDependencies": {

@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  Privacy guarantee: this policy forbids the page from loading or sending anything
+  over the network (connect-src 'none', no external scripts, styles, fonts or images).
+  Everything happens inside this file, on this computer.
+-->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'">
+<title>HAR Analyzer</title>
+<style>
+/*__STYLES__*/
+</style>
+</head>
+<body>
+<header>
+  <h1>HAR Analyzer</h1>
+  <nav class="tabs" id="tabs">
+    <button data-view="overview" disabled>Overview</button>
+    <button data-view="requests" disabled>Requests <span class="badge" id="b-req">0</span></button>
+    <button data-view="findings" disabled>Findings <span class="badge" id="b-find">0</span></button>
+    <button data-view="diag" disabled>Diagnose <span class="badge" id="b-diag">0</span></button>
+    <button data-view="auth" disabled>Authentication <span class="badge" id="b-auth">0</span></button>
+    <button data-view="compare" disabled>Compare</button>
+  </nav>
+  <span id="fileinfo"></span>
+  <span class="spacer"></span>
+  <button id="btn-open" class="primary" title="Open a .har file">Open HAR…</button>
+  <button id="btn-compare" disabled title="Compare this HAR with another one (for example a capture where things work)">Compare…</button>
+  <button id="btn-export" disabled title="Export a redacted HAR or a CSV of the request list">Export…</button>
+  <button id="btn-theme" title="Switch between light and dark">Theme</button>
+  <input type="file" id="file" accept=".har,.json,application/json" hidden>
+  <input type="file" id="file2" accept=".har,.json,application/json" hidden>
+</header>
+
+<main>
+  <section class="view" id="empty">
+    <div class="drop">
+      <h2>Drop a HAR file here</h2>
+      <p>or <button id="btn-open2" class="primary">choose a file…</button></p>
+      <p>Inspect every request, see where the time went, and get a list of likely problems: failed requests, server errors, CORS and mixed-content issues, slow DNS/TLS/server responses, redirect chains and more.</p>
+      <p>The Diagnose tab explains CORS errors, network and certificate failures, which proxy or gateway produced a 5xx, rate limiting and retry storms, errors hidden inside 200 responses, redirect loops, caching and CDN problems, slow page loads, WebSocket issues, hangs and security slips. Drop two HARs to compare them.</p>
+      <p>The Authentication tab identifies the authentication methods in use (Basic, Bearer/JWT, OAuth/OIDC, SAML, NTLM, Kerberos, API keys, session cookies, signed URLs) and explains why sign-ins and requests were rejected.</p>
+      <div class="lock">🔒 Runs entirely on this computer. This page cannot make network connections; your HAR is never uploaded.</div>
+      <div id="loaderr"></div>
+      <details class="how">
+        <summary>How do I capture a HAR file?</summary>
+        <p><b>Chrome / Edge:</b> open DevTools (F12) → Network tab → tick “Preserve log” → reproduce the problem → click the download arrow (“Export HAR”).<br>
+        <b>Firefox:</b> DevTools (F12) → Network → reproduce → gear icon → “Save All As HAR”.<br>
+        <b>Safari:</b> Develop → Show Web Inspector → Network → reproduce → “Export”.<br>
+        Proxies such as Fiddler, Charles, mitmproxy and Burp can also export HAR.</p>
+        <p>HAR files can contain passwords, cookies and tokens. Use <b>Export → Redacted HAR</b> before sharing one with anyone.</p>
+      </details>
+    </div>
+  </section>
+
+  <section class="view hidden" id="view-overview"></section>
+
+  <section class="view hidden" id="view-requests">
+    <div class="toolbar">
+      <input type="search" id="q" placeholder="Filter URLs…   e.g.  api  status:5xx  -cdn  slower:1s" title="Words match the URL. Prefix with - to exclude.&#10;Keys: status:404 status:4xx status:failed method:POST domain:example type:xhr mime:json larger:100k slower:500ms auth:fail auth:any diag:any diag:error diag:cors diag:network diag:server diag:hidden&#10;Press / to focus.">
+      <select id="f-status" title="Status">
+        <option value="">All statuses</option>
+        <option value="errors">Errors (4xx, 5xx, failed)</option>
+        <option value="failed">Failed (no response)</option>
+        <option value="2">2xx</option><option value="3">3xx</option><option value="4">4xx</option><option value="5">5xx</option>
+      </select>
+      <select id="f-domain" title="Domain"><option value="">All domains</option></select>
+      <select id="f-page" title="Page" class="hidden"><option value="">All pages</option></select>
+      <div class="chips" id="type-chips"></div>
+      <label title="Show only requests with findings"><input type="checkbox" id="f-issues"> With findings</label>
+      <label title="Also search headers and bodies"><input type="checkbox" id="f-deep"> Search headers &amp; bodies</label>
+      <span id="count"></span>
+    </div>
+    <div class="split" id="split">
+      <div class="tablewrap">
+        <div class="grid-row thead" id="thead">
+          <div class="c-idx" data-key="i">#</div>
+          <div class="c-status" data-key="status">Status</div>
+          <div class="c-method" data-key="method">Method</div>
+          <div class="c-domain" data-key="host">Domain</div>
+          <div class="c-path" data-key="path">Path</div>
+          <div class="c-type" data-key="type">Type</div>
+          <div class="c-size" data-key="transfer">Size</div>
+          <div class="c-time" data-key="time">Time</div>
+          <div class="c-wf" data-key="start">Waterfall</div>
+        </div>
+        <div id="rows" tabindex="0"><div id="rows-inner"></div></div>
+      </div>
+      <aside id="detail" class="hidden"></aside>
+    </div>
+  </section>
+
+  <section class="view hidden" id="view-findings"></section>
+
+  <section class="view hidden" id="view-auth"></section>
+
+  <section class="view hidden" id="view-diag"></section>
+
+  <section class="view hidden" id="view-compare"></section>
+</main>
+
+<dialog id="dlg-export">
+  <h3>Export</h3>
+  <p class="muted" style="margin:0 0 10px">Files are created on this computer and saved through your browser’s normal download.</p>
+  <h4 style="margin:12px 0 4px">Redacted HAR (safe to share)</h4>
+  <label><input type="checkbox" checked disabled> Mask Authorization, Cookie, Set-Cookie, API-key and CSRF headers, and all cookie values</label>
+  <label><input type="checkbox" id="x-params" checked> Mask token-like URL and form parameters and JSON fields (token, key, secret, password, session, signature, code…)</label>
+  <label><input type="checkbox" id="x-reqbody"> Remove request bodies entirely</label>
+  <label><input type="checkbox" id="x-resbody" checked> Remove response bodies</label>
+  <div class="actions">
+    <button id="x-csv">Request list as CSV</button>
+    <span class="spacer"></span>
+    <button id="x-cancel">Cancel</button>
+    <button id="x-har" class="primary">Download redacted HAR</button>
+  </div>
+</dialog>
+<div id="toast"></div>
+
+<script>
+/*__SCRIPTS__*/
+</script>
+</body>
+</html>

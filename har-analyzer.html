@@ -354,25 +354,7 @@ dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top
 <script>
 'use strict';
 
-/* ---------- small helpers ---------- */
-const $ = (s, r = document) => r.querySelector(s);
-const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
-function h(tag, attrs, ...kids) {
-  const el = document.createElement(tag);
-  if (attrs) for (const [k, v] of Object.entries(attrs)) {
-    if (v == null || v === false) continue;
-    if (k === 'class') el.className = v;
-    else if (k === 'text') el.textContent = v;
-    else if (k === 'style') { for (const [p, pv] of Object.entries(v)) el.style.setProperty(p, pv); }
-    else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v);
-    else el.setAttribute(k, v === true ? '' : v);
-  }
-  for (const c of kids.flat(Infinity)) {
-    if (c == null || c === false) continue;
-    el.append(c instanceof Node ? c : String(c));
-  }
-  return el;
-}
+// ---- src/core/base.js ----
 const pos = n => (typeof n === 'number' && n > 0 ? n : 0);
 function fmtBytes(n) {
   if (n == null || n < 0 || isNaN(n)) return '—';
@@ -399,23 +381,6 @@ function hdrAll(list, name) {
   name = name.toLowerCase();
   return list.filter(x => x && String(x.name).toLowerCase() === name).map(x => String(x.value ?? ''));
 }
-function toast(msg) {
-  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
-  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 1600);
-}
-async function copyText(text) {
-  try { await navigator.clipboard.writeText(text); toast('Copied to clipboard'); return; } catch (_) { /* fall back */ }
-  const ta = h('textarea', { style: { position: 'fixed', opacity: '0' } }); ta.value = text;
-  document.body.append(ta); ta.select();
-  try { document.execCommand('copy'); toast('Copied to clipboard'); } catch (_) { toast('Copy failed'); }
-  ta.remove();
-}
-function download(name, text, type) {
-  const url = URL.createObjectURL(new Blob([text], { type }));
-  const a = h('a', { href: url, download: name }); document.body.append(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 2000);
-}
-
 /* ---------- state ---------- */
 const S = {
   fileName: '', har: null, pages: [], entries: [], findings: [], filtered: [],
@@ -494,44 +459,6 @@ function normalize(har) {
     };
   });
   return { pages, entries, base };
-}
-
-async function loadText(text, name) {
-  CMP.b = null;
-  $('#loaderr').textContent = '';
-  let har;
-  try { har = JSON.parse(text.replace(/^﻿/, '')); }
-  catch (err) { showLoadError('Could not read ' + name + ' as JSON.\n' + err.message); return; }
-  let n;
-  try { n = normalize(har); } catch (err) { showLoadError(err.message); return; }
-  Object.assign(S, { text, fileName: name, har, pages: n.pages, entries: n.entries, base: n.base, selected: null, types: new Set(), sort: { key: 'start', dir: 1 } });
-  analyze();
-  try { await analyzeAuth(); } catch (err) { A.error = (err && err.message) || String(err); }
-  try { runDiagnostics(); } catch (err) { D.error = (err && err.message) || String(err); }
-  setupFilters();
-  const creator = har.log.creator ? [har.log.creator.name, har.log.creator.version].filter(Boolean).join(' ') : '';
-  $('#fileinfo').textContent = name + ' · ' + S.entries.length + ' requests' + (creator ? ' · ' + creator : '');
-  $('#fileinfo').title = $('#fileinfo').textContent;
-  $$('#tabs button').forEach(b => (b.disabled = false));
-  $('#btn-export').disabled = false;
-  $('#b-req').textContent = S.entries.length;
-  const errs = S.findings.filter(f => f.sev === 'error').length, warns = S.findings.filter(f => f.sev === 'warn').length;
-  const bf = $('#b-find'); bf.textContent = S.findings.length; bf.className = 'badge' + (errs ? ' err' : warns ? ' warn' : '');
-  const authFails = A.events.filter(v => !v.normal);
-  const ba = $('#b-auth'); ba.textContent = authFails.length; ba.className = 'badge' + (authFails.some(v => !v.recovered) ? ' err' : authFails.length ? ' warn' : '');
-  const dc = D.events.filter(v => !v.normal && v.sev !== 'info'), bd = $('#b-diag');
-  bd.textContent = dc.length; bd.className = 'badge' + (dc.some(v => v.sev === 'error') ? ' err' : dc.length ? ' warn' : '');
-  $('#btn-compare').disabled = false;
-  renderOverview(); renderFindings(); renderAuth(); renderDiag(); renderCompare(); applyFilters();
-  show('overview');
-}
-function showLoadError(msg) { show('empty'); $('#loaderr').textContent = msg; }
-function readFile(file) {
-  if (!file) return;
-  const r = new FileReader();
-  r.onload = () => loadText(String(r.result), file.name);
-  r.onerror = () => showLoadError('Could not read the file: ' + (r.error && r.error.message));
-  r.readAsText(file);
 }
 
 /* ---------- analysis ---------- */
@@ -656,288 +583,12 @@ function worstSev(e) {
   return w;
 }
 
-/* ---------- view switching ---------- */
-function show(view) {
-  S.view = view;
-  $$('section.view').forEach(s => s.classList.add('hidden'));
-  $(view === 'empty' ? '#empty' : '#view-' + view).classList.remove('hidden');
-  $$('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
-  if (view === 'requests') requestAnimationFrame(renderRows);
-}
-function openRequest(e, tab) {
-  show('requests');
-  if (!S.filtered.includes(e)) { resetFilters(); }
-  select(e, tab);
-}
-
-/* ---------- overview ---------- */
-function bars(rows, max) {
-  return rows.map(([label, n, title]) => h('div', { class: 'barrow', title: title || '' },
-    h('span', { text: label, style: { overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' } }),
-    h('div', { class: 'track' }, h('div', { class: 'fill', style: { width: (max ? n / max * 100 : 0) + '%' } })),
-    h('span', { class: 'n', text: String(n) })));
-}
-function reqTable(list, valueLabel, valueFn) {
-  return h('table', { class: 'simple' },
-    h('colgroup', null, h('col', { style: { width: '54px' } }), h('col'), h('col', { style: { width: '80px' } })),
-    h('thead', null, h('tr', null, h('th', { text: 'Status' }), h('th', { text: 'URL' }), h('th', { class: 'num', text: valueLabel }))),
-    h('tbody', null, list.map(e => h('tr', { class: 'click', onclick: () => openRequest(e) },
-      h('td', { text: e.status || 'failed' }),
-      h('td', { class: 'url', title: e.url, text: e.host + e.path }),
-      h('td', { class: 'num', text: valueFn(e) })))));
-}
-function renderOverview() {
-  const E = S.entries;
-  const failed = E.filter(isFailed).length;
-  const errs = E.filter(e => e.status >= 400).length;
-  const transfer = E.reduce((a, e) => a + e.transfer, 0);
-  const content = E.reduce((a, e) => a + e.contentSize, 0);
-  const span = E.reduce((a, e) => Math.max(a, e.start + e.time), 0);
-  const hosts = new Map();
-  for (const e of E) {
-    const k = e.host || '(none)';
-    const d = hosts.get(k) || { n: 0, bytes: 0, time: 0, errs: 0 };
-    d.n++; d.bytes += e.transfer; d.time += e.time; if (isFailed(e) || e.status >= 400) d.errs++;
-    hosts.set(k, d);
-  }
-  const card = (v, l, cls, title) => h('div', { class: 'card ' + (cls || ''), title: title || '' }, h('div', { class: 'v', text: v }), h('div', { class: 'l', text: l }));
-  const pt = S.pages.map(p => p.pageTimings || {});
-  const onLoad = pt.map(x => x.onLoad).filter(x => typeof x === 'number' && x >= 0);
-  const onDCL = pt.map(x => x.onContentLoad).filter(x => typeof x === 'number' && x >= 0);
-
-  const cards = h('div', { class: 'cards' },
-    card(String(E.length), 'requests'),
-    card(String(failed), 'failed (no response)', failed ? 'err' : ''),
-    card(String(errs), 'HTTP 4xx / 5xx', errs ? (E.some(e => e.status >= 500) ? 'err' : 'warn') : ''),
-    card(fmtBytes(transfer), 'transferred', '', fmtBytes(content) + ' uncompressed content'),
-    card(fmtMs(span), 'first request → last byte'),
-    onLoad.length ? card(fmtMs(onLoad[0]), 'page load event', '', onDCL.length ? 'DOMContentLoaded at ' + fmtMs(onDCL[0]) : '') : null,
-    card(String(hosts.size), 'domains'),
-    A.events.some(v => !v.normal) ? card(String(A.events.filter(v => !v.normal).length), 'authentication failures', 'err', 'See the Authentication tab') : null);
-
-  // Findings summary
-  const groups = groupFindings();
-  const fbox = h('div', { class: 'box' }, h('h3', { text: 'Findings' }),
-    groups.length ? h('table', { class: 'simple' },
-      h('colgroup', null, h('col', { style: { width: '62px' } }), h('col'), h('col', { style: { width: '50px' } })),
-      h('tbody', null, groups.map(g => h('tr', { class: 'click', onclick: () => { show('findings'); const d = document.getElementById('fg-' + g.code); if (d) { d.open = true; d.scrollIntoView({ block: 'start' }); } } },
-        h('td', null, h('span', { class: 'sev ' + g.sev, text: g.sev })),
-        h('td', { text: RULES[g.code].title }),
-        h('td', { class: 'num', text: String(g.items.length) })))))
-      : h('p', { class: 'allgood', text: '✓ No problems detected.' }));
-
-  const slow = [...E].sort((a, b) => b.time - a.time).slice(0, 10);
-  const big = [...E].sort((a, b) => b.transfer - a.transfer).slice(0, 10).filter(e => e.transfer > 0);
-
-  const statusCounts = new Map();
-  for (const e of E) { const k = isFailed(e) ? 'failed' : String(e.status); statusCounts.set(k, (statusCounts.get(k) || 0) + 1); }
-  const sc = [...statusCounts].sort((a, b) => b[1] - a[1]);
-  const typeCounts = new Map();
-  for (const e of E) typeCounts.set(e.type, (typeCounts.get(e.type) || 0) + 1);
-  const tc = [...typeCounts].sort((a, b) => b[1] - a[1]);
-  const hostRows = [...hosts].sort((a, b) => b[1].n - a[1].n);
-
-  const dcounts = diagCounts();
-  const dbox = h('div', { class: 'box' }, h('h3', { text: 'Diagnosis' }),
-    dcounts.size ? h('table', { class: 'simple' }, h('colgroup', null, h('col'), h('col', { style: { width: '50px' } })),
-      h('tbody', null, DCATS.filter(([k]) => dcounts.get(k)).map(([k, l]) => h('tr', { class: 'click', onclick: () => { show('diag'); const sct = document.getElementById('dsec-' + k); if (sct) sct.scrollIntoView({ block: 'start' }); } }, h('td', { text: l }), h('td', { class: 'num', text: String(dcounts.get(k)) })))))
-      : h('p', { class: 'allgood', text: '✓ Nothing diagnosed.' }),
-    A.events.some(v => !v.normal) ? h('p', { class: 'note' }, h('a', { href: '#', onclick: ev => { ev.preventDefault(); show('auth'); }, text: A.events.filter(v => !v.normal).length + ' authentication failure(s) →' })) : null);
-  $('#view-overview').replaceChildren(h('div', { class: 'ov' },
-    cards, dbox, fbox,
-    h('div', { class: 'box' }, h('h3', { text: 'Status codes' }), bars(sc.map(([k, n]) => [k, n]), sc.length ? sc[0][1] : 0),
-      h('h3', { text: 'Resource types', style: { 'margin-top': '14px' } }), bars(tc.map(([k, n]) => [TYPE_LABEL[k], n]), tc.length ? tc[0][1] : 0)),
-    h('div', { class: 'box' }, h('h3', { text: 'Slowest requests' }), reqTable(slow, 'Time', e => fmtMs(e.time))),
-    h('div', { class: 'box' }, h('h3', { text: 'Largest transfers' }), big.length ? reqTable(big, 'Size', e => fmtBytes(e.transfer)) : h('p', { class: 'muted', text: 'No size information in this HAR.' })),
-    h('div', { class: 'box wide' }, h('h3', { text: 'Domains' }),
-      h('table', { class: 'simple' },
-        h('colgroup', null, h('col'), h('col', { style: { width: '90px' } }), h('col', { style: { width: '90px' } }), h('col', { style: { width: '90px' } }), h('col', { style: { width: '90px' } })),
-        h('thead', null, h('tr', null, h('th', { text: 'Domain' }), h('th', { class: 'num', text: 'Requests' }), h('th', { class: 'num', text: 'Errors' }), h('th', { class: 'num', text: 'Transferred' }), h('th', { class: 'num', text: 'Avg time' }))),
-        h('tbody', null, hostRows.map(([k, d]) => h('tr', { class: 'click', title: 'Show requests to ' + k, onclick: () => { resetFilters(); $('#f-domain').value = k === '(none)' ? '' : k; applyFilters(); show('requests'); } },
-          h('td', { class: 'url', text: k }), h('td', { class: 'num', text: String(d.n) }),
-          h('td', { class: 'num', text: String(d.errs), style: d.errs ? { color: 'var(--err)' } : {} }),
-          h('td', { class: 'num', text: fmtBytes(d.bytes) }), h('td', { class: 'num', text: fmtMs(d.time / d.n) }))))))
-  ));
-}
-
 /* ---------- findings view ---------- */
 function groupFindings() {
   const m = new Map();
   for (const f of S.findings) { if (!m.has(f.code)) m.set(f.code, { code: f.code, sev: f.sev, items: [] }); m.get(f.code).items.push(f); }
   return [...m.values()].sort((a, b) => SEV_ORDER[a.sev] - SEV_ORDER[b.sev] || b.items.length - a.items.length);
 }
-function renderFindings() {
-  const groups = groupFindings();
-  const LIMIT = 200;
-  $('#view-findings').replaceChildren(h('div', { class: 'fv' },
-    groups.length ? null : h('p', { class: 'allgood', text: '✓ No problems detected in this HAR.' }),
-    groups.map(g => h('details', { id: 'fg-' + g.code, open: g.sev !== 'info' ? true : null },
-      h('summary', null, h('span', { class: 'sev ' + g.sev, text: g.sev }), h('span', { class: 't', text: RULES[g.code].title }), h('span', { class: 'badge', text: String(g.items.length) })),
-      h('p', { class: 'help', text: RULES[g.code].help }),
-      h('table', { class: 'simple' },
-        h('colgroup', null, h('col', { style: { width: '50px' } }), h('col', { style: { width: '60px' } }), h('col', { style: { width: '70px' } }), h('col'), h('col', { style: { width: '32%' } })),
-        h('tbody', null, g.items.slice(0, LIMIT).map(f => h('tr', { class: 'click', onclick: () => openRequest(f.e, 'issues') },
-          h('td', { class: 'muted', text: '#' + f.e.i }),
-          h('td', { text: f.e.status || 'failed' }),
-          h('td', { text: f.e.method }),
-          h('td', { class: 'url', title: f.e.url, text: f.e.url }),
-          h('td', { text: f.detail, title: f.detail }))))),
-      g.items.length > LIMIT ? h('div', { class: 'more muted', text: '… and ' + (g.items.length - LIMIT) + ' more. Use the Requests tab with “With findings” to see all.' }) : null))));
-}
-
-/* ---------- requests: filters ---------- */
-function setupFilters() {
-  const hosts = [...new Set(S.entries.map(e => e.host).filter(Boolean))].sort();
-  $('#f-domain').replaceChildren(h('option', { value: '', text: 'All domains' }), ...hosts.map(x => h('option', { value: x, text: x })));
-  const pg = $('#f-page');
-  pg.replaceChildren(h('option', { value: '', text: 'All pages' }), ...S.pages.map(p => h('option', { value: p.id, text: (p.title || p.id || '').slice(0, 80) })));
-  pg.classList.toggle('hidden', S.pages.length < 2);
-  const present = new Set(S.entries.map(e => e.type));
-  const chips = $('#type-chips');
-  chips.replaceChildren(h('button', { class: 'chip on', 'data-type': '', text: 'All' }),
-    ...Object.keys(TYPE_LABEL).filter(k => present.has(k)).map(k => h('button', { class: 'chip', 'data-type': k, text: TYPE_LABEL[k] })));
-  resetFilters();
-}
-function resetFilters() {
-  $('#q').value = ''; $('#f-status').value = ''; $('#f-domain').value = ''; $('#f-page').value = '';
-  $('#f-issues').checked = false; $('#f-deep').checked = false; S.types.clear(); syncChips(); applyFilters();
-}
-function syncChips() {
-  $$('#type-chips .chip').forEach(c => c.classList.toggle('on', c.dataset.type ? S.types.has(c.dataset.type) : S.types.size === 0));
-}
-function parseSize(v) { const m = /^([\d.]+)\s*(b|k|kb|m|mb|g|gb)?$/i.exec(v); if (!m) return NaN; const mult = { b: 1, k: 1024, kb: 1024, m: 1048576, mb: 1048576, g: 1073741824, gb: 1073741824 }[(m[2] || 'b').toLowerCase()]; return parseFloat(m[1]) * mult; }
-function parseDur(v) { const m = /^([\d.]+)\s*(ms|s)?$/i.exec(v); if (!m) return NaN; return parseFloat(m[1]) * ((m[2] || 'ms').toLowerCase() === 's' ? 1000 : 1); }
-function parseQuery(s) {
-  return s.trim().split(/\s+/).filter(Boolean).map(tok => {
-    let neg = false;
-    if (tok.length > 1 && tok[0] === '-') { neg = true; tok = tok.slice(1); }
-    const m = /^(status|method|domain|host|type|mime|larger|slower|auth|diag):(.+)$/i.exec(tok);
-    return m ? { neg, key: m[1].toLowerCase(), val: m[2].toLowerCase() } : { neg, key: null, val: tok.toLowerCase() };
-  });
-}
-function haystack(e) {
-  if (e._hay == null) {
-    const r = e.raw.request || {}, s = e.raw.response || {};
-    const parts = [e.url];
-    for (const x of (r.headers || [])) parts.push(x.name + ': ' + x.value);
-    for (const x of (s.headers || [])) parts.push(x.name + ': ' + x.value);
-    if (r.postData && r.postData.text) parts.push(String(r.postData.text).slice(0, 200000));
-    const body = bodyText(s.content || {}); if (body) parts.push(body.slice(0, 500000));
-    e._hay = parts.join('\n').toLowerCase();
-  }
-  return e._hay;
-}
-function tokMatch(e, t, deep) {
-  const v = t.val;
-  switch (t.key) {
-    case 'status':
-      if (v === 'failed' || v === '0') return isFailed(e);
-      if (/^[1-5]xx$/.test(v)) return Math.floor(e.status / 100) === +v[0];
-      return String(e.status) === v;
-    case 'method': return e.method.toLowerCase() === v;
-    case 'domain': case 'host': return e.host.toLowerCase().includes(v);
-    case 'type': return e.type === v || TYPE_LABEL[e.type].toLowerCase().startsWith(v);
-    case 'mime': return e.mime.toLowerCase().includes(v);
-    case 'larger': return e.transfer > parseSize(v);
-    case 'slower': return e.time > parseDur(v);
-    case 'diag': return !!(e.diag && e.diag.some(x => !x.normal && (v === 'any' || x.cat === v || x.sev === v)));
-    case 'auth': return v === 'fail' ? !!(e.auth && e.auth.event && !e.auth.event.normal) : !!(e.auth || e.oauthRole || e.saml);
-    default: return (deep ? haystack(e) : e.url.toLowerCase()).includes(v);
-  }
-}
-function applyFilters() {
-  const q = parseQuery($('#q').value);
-  const st = $('#f-status').value, dom = $('#f-domain').value, pg = $('#f-page').value;
-  const issues = $('#f-issues').checked, deep = $('#f-deep').checked;
-  S.filtered = S.entries.filter(e => {
-    if (pg && e.pageref !== pg) return false;
-    if (dom && e.host !== dom) return false;
-    if (S.types.size && !S.types.has(e.type)) return false;
-    if (issues && !e.findings.length) return false;
-    if (st === 'errors' && !(isFailed(e) || e.status >= 400)) return false;
-    if (st === 'failed' && !isFailed(e)) return false;
-    if (/^\d$/.test(st) && Math.floor(e.status / 100) !== +st) return false;
-    for (const t of q) if (tokMatch(e, t, deep) === t.neg) return false;
-    return true;
-  });
-  sortFiltered();
-  S.span = S.filtered.reduce((a, e) => Math.max(a, e.start + e.time), 0);
-  S.minStart = S.filtered.reduce((a, e) => Math.min(a, e.start), Infinity);
-  if (S.minStart === Infinity) S.minStart = 0;
-  $('#count').textContent = S.filtered.length === S.entries.length ? S.entries.length + ' requests' : S.filtered.length + ' of ' + S.entries.length + ' requests';
-  renderRows();
-}
-function sortFiltered() {
-  const { key, dir } = S.sort;
-  S.filtered.sort((a, b) => {
-    let x = a[key], y = b[key];
-    if (key === 'start') { x = a.start; y = b.start; if (x === y) return (a.i - b.i) * dir; }
-    if (typeof x === 'string') return x.localeCompare(y) * dir || (a.i - b.i);
-    return ((x > y) - (x < y)) * dir || (a.i - b.i);
-  });
-  $$('#thead > div').forEach(d => {
-    const on = d.dataset.key === key;
-    d.classList.toggle('sorted', on);
-    d.textContent = d.textContent.replace(/ [▲▼]$/, '') + (on ? (dir > 0 ? ' ▲' : ' ▼') : '');
-  });
-}
-
-/* ---------- requests: virtualised table ---------- */
-const ROW_H = 26;
-function renderRows() {
-  const vp = $('#rows'), inner = $('#rows-inner');
-  if (!S.filtered.length) {
-    inner.style.height = 'auto';
-    inner.replaceChildren(h('div', { class: 'nomatch', text: S.entries.length ? 'No requests match the current filters.' : '' }));
-    return;
-  }
-  inner.style.height = S.filtered.length * ROW_H + 'px';
-  const top = vp.scrollTop, height = vp.clientHeight || 600;
-  const first = Math.max(0, Math.floor(top / ROW_H) - 8);
-  const last = Math.min(S.filtered.length, Math.ceil((top + height) / ROW_H) + 8);
-  const span = Math.max(1, S.span - S.minStart);
-  const frag = document.createDocumentFragment();
-  for (let k = first; k < last; k++) {
-    const e = S.filtered[k];
-    const sc = statusClass(e);
-    const ws = worstSev(e);
-    const left = (e.start - S.minStart) / span * 100;
-    const width = Math.max(e.time / span * 100, 0.2);
-    const t = e.timings, tot = t.blocked + t.dns + t.connect + t.send + t.wait + t.receive;
-    const segs = tot > 0 ? [['blocked', t.blocked], ['dns', t.dns], ['connect', t.tcp], ['ssl', t.ssl], ['send', t.send], ['wait', t.wait], ['receive', t.receive]]
-      .filter(s => s[1] > 0).map(s => h('span', { class: 'ph-' + s[0], style: { width: (s[1] / tot * 100) + '%' } })) : [];
-    frag.append(h('div', {
-      class: 'grid-row row' + (e === S.selected ? ' sel' : '') + (sc === 'err' ? ' st-err' : sc === 'warn' ? ' st-warn' : ''),
-      style: { top: k * ROW_H + 'px' }, 'data-k': k, title: e.url
-    },
-      h('div', { class: 'c-idx muted' }, ws ? h('span', { class: 'dot ' + ws }) : null, String(e.i)),
-      h('div', { class: 'c-status', text: isFailed(e) ? 'failed' : String(e.status) }),
-      h('div', { class: 'c-method', text: e.method }),
-      h('div', { class: 'c-domain', text: e.host }),
-      h('div', { class: 'c-path', text: S.selected ? (e.u ? (e.u.pathname.split('/').filter(Boolean).pop() || e.host) + e.u.search : e.url) : e.path }),
-      h('div', { class: 'c-type', text: TYPE_LABEL[e.type] }),
-      h('div', { class: 'c-size', text: e.fromCache && !e.transfer ? '(cache)' : fmtBytes(e.transfer) }),
-      h('div', { class: 'c-time', text: fmtMs(e.time) }),
-      h('div', { class: 'c-wf' }, h('div', { class: 'wf' }, h('div', { class: 'bar', style: { left: Math.min(left, 99.8) + '%', width: width + '%' } }, segs)))));
-  }
-  inner.replaceChildren(frag);
-}
-function select(e, tab) {
-  S.selected = e;
-  if (tab) S.dtab = tab;
-  $('#split').classList.toggle('has-detail', !!e);
-  $('#detail').classList.toggle('hidden', !e);
-  if (e) {
-    const k = S.filtered.indexOf(e), vp = $('#rows');
-    if (k >= 0) {
-      const y = k * ROW_H;
-      if (y < vp.scrollTop || y + ROW_H > vp.scrollTop + vp.clientHeight) vp.scrollTop = Math.max(0, y - vp.clientHeight / 2);
-    }
-    renderDetail();
-  }
-  renderRows();
-}
-
 /* ---------- detail pane ---------- */
 function bodyText(content) {
   if (!content || content.text == null) return null;
@@ -950,20 +601,6 @@ function bodyText(content) {
     } catch (_) { return null; }
   }
   return String(content.text);
-}
-const MAX_SHOW = 1_000_000;
-function prettyBody(text, mime) {
-  if (text == null) return null;
-  let out = text, note = '';
-  if (/json/i.test(mime) || /^\s*[\[{]/.test(text)) {
-    try { out = JSON.stringify(JSON.parse(text), null, 2); note = 'JSON (formatted)'; } catch (_) { /* not JSON */ }
-  }
-  if (out.length > MAX_SHOW) { note = (note ? note + ' · ' : '') + 'showing first ' + fmtBytes(MAX_SHOW) + ' of ' + fmtBytes(out.length); out = out.slice(0, MAX_SHOW); }
-  return { out, note };
-}
-function kvList(rows) {
-  if (!rows || !rows.length) return h('p', { class: 'note', text: 'None.' });
-  return h('div', { class: 'kv' }, rows.map(([k, v]) => [h('div', { class: 'k', text: k }), h('div', { class: 'v', text: v == null ? '' : String(v) })]));
 }
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'"; }
 function toCurl(e) {
@@ -980,158 +617,6 @@ function toCurl(e) {
   parts.push('--compressed');
   return parts.join(' \\\n  ');
 }
-function timingRows(e) {
-  const t = e.timings;
-  const phases = [
-    ['blocked', 'Queued / stalled', t.blocked], ['dns', 'DNS lookup', t.dns], ['connect', 'TCP connect', t.tcp], ['ssl', 'TLS handshake', t.ssl],
-    ['send', 'Request sent', t.send], ['wait', 'Waiting (TTFB)', t.wait], ['receive', 'Content download', t.receive]];
-  const total = Math.max(e.time, phases.reduce((a, p) => a + p[2], 0), 0.0001);
-  let offset = 0;
-  return phases.map(([k, label, v]) => {
-    const row = h('div', { class: 'trow' }, h('span', { text: label }),
-      h('div', { class: 'track' }, v > 0 ? h('span', { class: 'ph-' + k, style: { left: (offset / total * 100) + '%', width: (v / total * 100) + '%' } }) : null),
-      h('span', { class: 'n', text: v > 0 ? fmtMs(v) : '—' }));
-    offset += v;
-    return row;
-  });
-}
-function renderDetail() {
-  const e = S.selected; if (!e) return;
-  const req = e.raw.request || {}, res = e.raw.response || {};
-  const sc = statusClass(e);
-  const tabs = [['headers', 'Headers'], ['payload', 'Payload'], ['response', 'Response'], ['timing', 'Timing'], ['cookies', 'Cookies'], ['issues', 'Findings' + (e.findings.length ? ' (' + e.findings.length + ')' : '')]];
-  if (hasAuthInfo(e)) tabs.splice(5, 0, ['auth', 'Auth' + (e.auth && e.auth.event && !e.auth.event.normal ? ' ⚠' : '')]);
-  if (e.diag && e.diag.length) tabs.splice(tabs.length - 1, 0, ['diag', 'Diagnosis' + (e.diag.some(v => !v.normal && v.sev !== 'info') ? ' ⚠' : '')]);
-  if (!tabs.some(t => t[0] === S.dtab)) S.dtab = 'headers';
-
-  const body = h('div', { class: 'dbody' });
-  const fill = () => {
-    body.replaceChildren(h('div', null, detailTab(e, S.dtab)));
-    $$('.dtabs button', pane).forEach(b => b.classList.toggle('active', b.dataset.tab === S.dtab));
-  };
-  const pane = $('#detail');
-  pane.replaceChildren(
-    h('div', { class: 'dhead' },
-      h('div', { class: 'top' },
-        h('span', { class: 'status-pill ' + sc, text: isFailed(e) ? 'failed' : e.status + ' ' + e.statusText }),
-        h('b', { text: e.method }),
-        h('span', { class: 'muted', text: '#' + e.i + ' · ' + fmtMs(e.time) + ' · ' + fmtBytes(e.transfer) }),
-        h('span', { class: 'spacer' }),
-        h('button', { title: 'Copy URL', onclick: () => copyText(e.url), text: 'Copy URL' }),
-        h('button', { title: 'Copy this request as a curl command', onclick: () => copyText(toCurl(e)), text: 'Copy as cURL' }),
-        h('button', { title: 'Close (Esc)', onclick: () => select(null), text: '✕' })),
-      h('div', { class: 'url', text: e.url })),
-    h('div', { class: 'dtabs' }, tabs.map(([k, l]) => h('button', { 'data-tab': k, text: l, onclick: () => { S.dtab = k; fill(); } }))),
-    body);
-  fill();
-}
-function detailTab(e, tab) {
-  const req = e.raw.request || {}, res = e.raw.response || {}, content = res.content || {};
-  if (tab === 'headers') {
-    const started = e.raw.startedDateTime || '';
-    const chain = [];
-    let c = e; while (c.redirectFrom && chain.length < 30) { c = c.redirectFrom; if (chain.includes(c)) break; }
-    for (let x = c, n = 0; x && n < 30; x = x.redirectTo, n++) chain.push(x);
-    return [
-      h('h4', { text: 'General' }),
-      kvList([
-        ['Request URL', e.url], ['Method', e.method], ['Status', isFailed(e) ? '(failed)' : e.status + ' ' + e.statusText],
-        e.error ? ['Error', e.error] : null,
-        ['HTTP version', e.httpVersion || '—'], ['Remote address', e.serverIP || '—'], e.connection ? ['Connection ID', e.connection] : null,
-        ['Type', TYPE_LABEL[e.type] + (e.mime ? ' (' + e.mime + ')' : '')],
-        ['Started', started + (started ? '  (+' + fmtMs(e.start) + ')' : '')], ['Duration', fmtMs(e.time)],
-        ['Transferred', fmtBytes(e.transfer)], ['Content size', fmtBytes(e.contentSize)],
-        e.fromCache ? ['Served from', e.fromCache] : null,
-        e.redirectTarget ? ['Redirects to', e.redirectTarget] : null,
-        e.raw._initiator && e.raw._initiator.url ? ['Initiator', e.raw._initiator.url + (e.raw._initiator.lineNumber != null ? ':' + e.raw._initiator.lineNumber : '')] : (e.raw._initiator && e.raw._initiator.type ? ['Initiator', e.raw._initiator.type] : null),
-      ].filter(Boolean)),
-      chain.length > 1 ? [h('h4', { text: 'Redirect chain' }), h('div', { class: 'chain' }, chain.map(x => h('div', null,
-        x === e ? h('b', { text: '▶ ' + (x.status || 'failed') + '  ' + x.url }) : h('a', { href: '#', text: (x.status || 'failed') + '  ' + x.url, onclick: ev => { ev.preventDefault(); select(x); } }))))] : null,
-      h('h4', { text: 'Response headers (' + (res.headers || []).length + ')' }),
-      kvList((res.headers || []).map(x => [x.name, x.value])),
-      h('h4', { text: 'Request headers (' + (req.headers || []).length + ')' }),
-      kvList((req.headers || []).map(x => [x.name, x.value])),
-    ].flat();
-  }
-  if (tab === 'payload') {
-    const out = [h('h4', { text: 'Query string parameters' }), kvList((req.queryString || []).map(x => [x.name, x.value]))];
-    const pd = req.postData;
-    out.push(h('h4', { text: 'Request body' }));
-    if (!pd) out.push(h('p', { class: 'note', text: 'No request body.' }));
-    else {
-      if (pd.mimeType) out.push(h('p', { class: 'note', text: pd.mimeType }));
-      if (Array.isArray(pd.params) && pd.params.length) out.push(kvList(pd.params.map(p => [p.name, p.fileName ? '(file: ' + p.fileName + ')' : p.value])));
-      if (pd.text != null) {
-        let text = String(pd.text);
-        if (/x-www-form-urlencoded/i.test(pd.mimeType || '') && !(pd.params && pd.params.length)) {
-          try { out.push(kvList([...new URLSearchParams(text)])); } catch (_) { /* show raw */ }
-        }
-        const p = prettyBody(text, pd.mimeType || '');
-        if (p.note) out.push(h('p', { class: 'note', text: p.note }));
-        out.push(h('pre', { class: 'body', text: p.out }));
-      }
-    }
-    return out;
-  }
-  if (tab === 'response') {
-    const mime = content.mimeType || e.mime;
-    const out = [h('p', { class: 'note', text: [mime, content.encoding ? 'encoding: ' + content.encoding : '', content.compression ? 'saved by compression: ' + fmtBytes(content.compression) : ''].filter(Boolean).join(' · ') })];
-    if (content.text == null || content.text === '') {
-      out.push(h('p', { class: 'note', text: e.contentSize ? 'The response body was not saved in this HAR. (Some browsers omit bodies, or the HAR was exported without content.)' : 'Empty response body.' }));
-      if (content.comment) out.push(h('p', { class: 'note', text: content.comment }));
-      return out;
-    }
-    if (/^image\/(png|jpe?g|gif|webp|avif|bmp|x-icon|vnd\.microsoft\.icon|svg\+xml)$/i.test(mime)) {
-      const src = content.encoding === 'base64' ? 'data:' + mime + ';base64,' + content.text : 'data:' + mime + ';charset=utf-8,' + encodeURIComponent(content.text);
-      const dims = h('p', { class: 'note' });
-      out.push(h('img', { class: 'imgprev', src, alt: 'response image', onload: ev => { dims.textContent = ev.target.naturalWidth + ' × ' + ev.target.naturalHeight + ' px'; } }), dims);
-      return out;
-    }
-    if (content.encoding === 'base64' && !isTextMime(mime)) {
-      out.push(h('p', { class: 'note', text: 'Binary content (' + fmtBytes(Math.floor(content.text.length * 3 / 4)) + '), not shown.' }));
-      return out;
-    }
-    const p = prettyBody(bodyText(content), mime);
-    if (!p) { out.push(h('p', { class: 'note', text: 'Could not decode the body.' })); return out; }
-    if (p.note) out.push(h('p', { class: 'note', text: p.note }));
-    out.push(h('pre', { class: 'body', text: p.out }));
-    return out;
-  }
-  if (tab === 'timing') {
-    const t = e.timings;
-    const ttfbStart = t.blocked + t.dns + t.connect + t.send;
-    return [
-      h('h4', { text: 'Where the time went' }),
-      timingRows(e),
-      h('div', { class: 'trow', style: { 'margin-top': '8px', 'font-weight': '600' } }, h('span', { text: 'Total' }), h('span'), h('span', { class: 'n', text: fmtMs(e.time) })),
-      h('div', { class: 'legend' }, [['blocked', 'Queued'], ['dns', 'DNS'], ['connect', 'TCP'], ['ssl', 'TLS'], ['send', 'Send'], ['wait', 'Waiting'], ['receive', 'Download']].map(([k, l]) => h('span', null, h('i', { class: 'ph-' + k }), l))),
-      h('p', { class: 'note', text: 'Started ' + fmtMs(e.start) + ' after the first request. First byte arrived after ' + fmtMs(ttfbStart + t.wait) + '. ' +
-        (t.dns === 0 && t.connect === 0 ? 'No DNS or connect time: an existing connection was reused (or the browser did not record it). ' : '') +
-        (t.wait > Math.max(t.receive, t.blocked, t.dns, t.connect) && t.wait > 200 ? 'Most of the time was spent waiting for the server.' : '') }),
-    ].flat();
-  }
-  if (tab === 'cookies') {
-    const ck = list => list && list.length ? h('table', { class: 'simple' },
-      h('thead', null, h('tr', null, ['Name', 'Value', 'Domain', 'Path', 'Expires', 'Flags'].map(x => h('th', { text: x })))),
-      h('tbody', null, list.map(c => h('tr', null,
-        h('td', { class: 'mono', text: c.name || '' }), h('td', { class: 'mono', text: c.value || '', title: c.value || '' }),
-        h('td', { text: c.domain || '' }), h('td', { text: c.path || '' }), h('td', { text: c.expires || '' }),
-        h('td', { text: [c.httpOnly ? 'HttpOnly' : '', c.secure ? 'Secure' : '', c.sameSite ? 'SameSite=' + c.sameSite : ''].filter(Boolean).join(' ') })))))
-      : h('p', { class: 'note', text: 'None.' });
-    return [h('h4', { text: 'Sent with the request' }), ck(req.cookies), h('h4', { text: 'Set by the response' }), ck(res.cookies)];
-  }
-  if (tab === 'diag') return e.diag && e.diag.length ? [...e.diag].sort((a, b) => dSevRank[a.sev] - dSevRank[b.sev]).map(v => [v.e && v.e !== e ? h('p', { class: 'note' }, 'Part of a group; main request ', stepLink(v.e)) : null, dCard(v, v.e === e)]).flat() : [h('p', { class: 'note', text: 'Nothing diagnosed for this request.' })];
-  if (tab === 'auth') return hasAuthInfo(e) ? authDetail(e) : [h('p', { class: 'note', text: 'No authentication information on this request.' })];
-  if (tab === 'issues') {
-    if (!e.findings.length) return [h('p', { class: 'allgood', text: '✓ No findings for this request.' })];
-    return e.findings.map(f => h('div', { class: 'finding' },
-      h('div', null, h('span', { class: 'sev ' + f.sev, text: f.sev }), ' ', h('span', { class: 't', text: RULES[f.code].title })),
-      f.detail ? h('p', { class: 'mono', text: f.detail }) : null,
-      h('p', { text: RULES[f.code].help })));
-  }
-  return [];
-}
-
 /* ---------- export ---------- */
 const SENSITIVE_HEADER = /^(authorization|proxy-authorization|cookie|set-cookie|x-api-key|api-key|apikey|x-auth-token|x-access-token|x-refresh-token|x-id-token|x-csrf-token|x-xsrf-token|csrf-token|x-amz-security-token|x-goog-api-key|ocp-apim-subscription-key|x-functions-key|private-token|x-session-id|x-ms-token-aad-access-token)$/i;
 const SENSITIVE_NAME = /(token|secret|passw|pwd|auth|session|sessid|sig|signature|credential|apikey|api_key|api-key|ticket|assertion|saml|jwt|bearer)/i;
@@ -1196,24 +681,51 @@ function buildRedacted(opts) {
   return har;
 }
 function csvCell(v) { v = v == null ? '' : String(v); return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
-function exportCsv() {
-  const cols = ['#', 'started_ms', 'method', 'status', 'status_text', 'url', 'domain', 'type', 'mime', 'transfer_bytes', 'content_bytes', 'time_ms', 'blocked_ms', 'dns_ms', 'connect_ms', 'tls_ms', 'send_ms', 'wait_ms', 'receive_ms', 'http_version', 'server_ip', 'error', 'findings'];
-  const lines = [cols.join(',')];
-  for (const e of S.filtered) {
-    const t = e.timings;
-    lines.push([e.i, Math.round(e.start), e.method, e.status, e.statusText, e.url, e.host, TYPE_LABEL[e.type], e.mime, e.transfer, e.contentSize, e.time.toFixed(1),
-      t.blocked.toFixed(1), t.dns.toFixed(1), t.tcp.toFixed(1), t.ssl.toFixed(1), t.send.toFixed(1), t.wait.toFixed(1), t.receive.toFixed(1),
-      e.httpVersion, e.serverIP, e.error, e.findings.map(f => RULES[f.code].title).join('; ')].map(csvCell).join(','));
-  }
-  download(S.fileName.replace(/\.(har|json)$/i, '') + '-requests.csv', lines.join('\r\n'), 'text/csv');
+
+// ---- src/core/xml.js ----
+/* ---------- minimal XML reader ----------
+   Used where DOMParser is not available (the command-line tool under Node).
+   Supports what the SAML analysis needs: elements, attributes, text, namespaces
+   prefixes (matched by local name), comments, CDATA and processing instructions. */
+function miniXml(text) {
+  const decode = s => s.replace(/&(lt|gt|amp|quot|apos|#\d+|#x[0-9a-f]+);/gi, (m, e) => e === 'lt' ? '<' : e === 'gt' ? '>' : e === 'amp' ? '&' : e === 'quot' ? '"' : e === 'apos' ? "'" : String.fromCodePoint(e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10)));
+  const mk = (name, attrs, parent) => {
+    const local = name.includes(':') ? name.split(':').pop() : name;
+    const el = { nodeName: name, localName: local, attrs, children: [], text: [], parent,
+      getAttribute: n => (Object.prototype.hasOwnProperty.call(attrs, n) ? attrs[n] : null),
+      getElementsByTagNameNS: (_ns, n) => findAll(el, n), getElementsByTagName: n => findAll(el, n) };
+    Object.defineProperty(el, 'textContent', { get: () => el.text.join('') + el.children.map(c => c.textContent).join('') });
+    return el;
+  };
+  const findAll = (el, n) => { const out = []; const walk = x => { for (const c of x.children) { if (n === '*' || c.localName === n || c.nodeName === n) out.push(c); walk(c); } }; walk(el); return out; };
+  const doc = mk('#document', {}, null);
+  let cur = doc, i = 0;
+  try {
+    while (i < text.length) {
+      const lt = text.indexOf('<', i);
+      if (lt < 0) { cur.text.push(decode(text.slice(i))); break; }
+      if (lt > i) cur.text.push(decode(text.slice(i, lt)));
+      if (text.startsWith('<!--', lt)) { const e = text.indexOf('-->', lt); if (e < 0) return null; i = e + 3; continue; }
+      if (text.startsWith('<![CDATA[', lt)) { const e = text.indexOf(']]>', lt); if (e < 0) return null; cur.text.push(text.slice(lt + 9, e)); i = e + 3; continue; }
+      if (text.startsWith('<?', lt) || text.startsWith('<!', lt)) { const e = text.indexOf('>', lt); if (e < 0) return null; i = e + 1; continue; }
+      const gt = text.indexOf('>', lt); if (gt < 0) return null;
+      const tag = text.slice(lt + 1, gt);
+      if (tag[0] === '/') { if (cur === doc) return null; cur = cur.parent; i = gt + 1; continue; }
+      const self = tag.endsWith('/'), body = self ? tag.slice(0, -1) : tag;
+      const nm = /^\s*([^\s/>]+)/.exec(body); if (!nm) return null;
+      const attrs = {}; const re = /([^\s=]+)\s*=\s*("([^"]*)"|'([^']*)')/g; let m;
+      while ((m = re.exec(body.slice(nm[0].length)))) attrs[m[1]] = decode(m[3] != null ? m[3] : m[4]);
+      const el = mk(nm[1], attrs, cur); cur.children.push(el);
+      if (!self) cur = el;
+      i = gt + 1;
+    }
+  } catch (_) { return null; }
+  if (cur !== doc || !doc.children.length) return null;
+  doc.documentElement = doc.children[0];
+  return doc;
 }
 
-/* ======================================================================
-   Authentication analysis
-   Works out which authentication methods are in use, finds failed
-   authentication / authorization / sign-in attempts and explains why
-   each one failed, from evidence in the HAR.
-   ====================================================================== */
+// ---- src/core/auth.js ----
 const AUTH_STATUS = new Set([401, 403, 407, 419, 440, 495, 496, 498, 511]);
 const A = { events: [], tokens: new Map(), flows: [], notes: [], hosts: new Map(), jar: [], skew: new Map(), secrets: new Set(), sanitized: false, error: '' };
 const CONF_ORDER = { high: 0, likely: 1, possible: 2 };
@@ -1681,8 +1193,9 @@ function flagEntry(e, kind, headline, cause) {
   e.flagged.causes.push(cause);
 }
 async function pkceS256(verifier) {
-  if (!(window.crypto && crypto.subtle)) return null;
-  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+  const cr = globalThis.crypto;
+  if (!(cr && cr.subtle)) return null;
+  const d = await cr.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
   let s = ''; for (const b of new Uint8Array(d)) s += String.fromCharCode(b);
   return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
@@ -1842,7 +1355,11 @@ async function samlXml(val) {
   if (/^\s*</.test(t)) return t;
   try { return await inflateRaw(b); } catch (_) { return null; }
 }
-function parseXml(t) { const d = new DOMParser().parseFromString(t, 'application/xml'); return d.getElementsByTagName('parsererror').length ? null : d; }
+function parseXml(t) {
+  if (typeof DOMParser === 'undefined') return miniXml(t);
+  const d = new DOMParser().parseFromString(t, 'application/xml');
+  return d.getElementsByTagName('parsererror').length ? null : d;
+}
 const xq = (d, name) => d.getElementsByTagNameNS('*', name);
 const xtext = (d, name) => { const n = xq(d, name)[0]; return n ? n.textContent.trim() : ''; };
 async function detectSaml(byTime) {
@@ -2270,125 +1787,7 @@ function verdictText() {
   return fails.length + ' authentication failure' + (fails.length > 1 ? 's' : '') + ' on ' + hosts.size + ' host' + (hosts.size > 1 ? 's' : '') + (open !== fails.length ? ' (' + (fails.length - open) + ' recovered later)' : '') + '. Most likely causes: ' + [...groups].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([t, n]) => t + (n > 1 ? ' (×' + n + ')' : '')).join('; ') + '.';
 }
 
-/* ---------- Authentication view ---------- */
-function causeBlock(c, minor) {
-  return h('div', { class: 'cause' + (minor ? ' minor' : ''), 'data-cause': c.id },
-    h('div', { class: 'ct' }, h('span', { class: 'conf ' + c.conf, text: CONF_LABEL[c.conf] }), h('span', { text: c.title })),
-    c.detail ? h('p', { text: c.detail }) : null);
-}
-function eventCard(v, inDetail) {
-  const c0 = v.causes[0], fx = fixesOf(v);
-  return h('div', { class: 'acard ' + (v.normal ? 'normal' : v.recovered ? 'recovered' : 'fail'), 'data-cause': c0 ? c0.id : '' },
-    h('div', { class: 'ahead' },
-      h('span', { class: 'sev ' + (v.normal ? 'info' : v.recovered ? 'warn' : 'error'), text: v.kind }),
-      h('b', { text: v.headline }),
-      v.recovered ? h('span', { class: 'okchip', text: 'succeeded later (#' + v.recovered.i + ')' }) : null,
-      h('span', { class: 'spacer' }),
-      inDetail ? null : h('a', { href: '#', text: '#' + v.e.i + ' · +' + fmtMs(v.e.start), onclick: ev => { ev.preventDefault(); openRequest(v.e, 'auth'); } })),
-    inDetail ? null : h('div', { class: 'aurl', text: v.e.method + ' ' + v.e.url }),
-    h('div', { class: 'kv2' }, h('span', { class: 'k', text: 'Credentials sent' }), h('span', { text: v.sent }),
-      v.expected ? [h('span', { class: 'k', text: 'Server asked for' }), h('span', { text: v.expected })] : null),
-    c0 ? causeBlock(c0) : null,
-    v.causes.length > 1 ? h('details', { class: 'more' }, h('summary', { text: 'Other possible causes (' + (v.causes.length - 1) + ')' }), v.causes.slice(1).map(c => causeBlock(c, true))) : null,
-    v.evidence.length ? h('div', { class: 'evi' }, h('div', { class: 'k', text: 'Evidence' }), h('ul', null, v.evidence.map(x => h('li', { text: x })))) : null,
-    fx.length ? h('div', { class: 'evi' }, h('div', { class: 'k', text: 'What to try' }), h('ul', null, fx.map(x => h('li', { text: x })))) : null);
-}
-function stepLink(e) { return h('a', { href: '#', text: '#' + e.i, onclick: ev => { ev.preventDefault(); openRequest(e, 'auth'); } }); }
-function flowCard(f) {
-  const bad = f.checks.some(c => c.ok === false);
-  return h('div', { class: 'acard flow' + (bad ? ' fail' : '') },
-    h('div', { class: 'ahead' }, h('span', { class: 'sev ' + (bad ? 'error' : 'info'), text: f.kind === 'saml' ? 'SAML' : f.kind === 'windows' ? 'Windows' : 'OAuth' }), h('b', { text: f.title }),
-      h('span', { class: 'muted', text: [f.idp, f.client_id ? 'client ' + f.client_id : ''].filter(Boolean).join(' · ') })),
-    h('ol', { class: 'steps' }, f.steps.map(s => h('li', null, stepLink(s.e), ' ', s.label))),
-    f.checks.length ? h('ul', { class: 'checks' }, f.checks.map(c => h('li', { class: c.ok === true ? 'ok' : c.ok === false ? 'bad' : 'info' },
-      h('span', { class: 'ic', text: c.ok === true ? '✓' : c.ok === false ? '✗' : 'i' }), h('span', { text: c.label }), c.detail ? h('span', { class: 'muted', text: ' — ' + c.detail }) : null))) : null);
-}
-function renderAuth() {
-  const root = $('#view-auth');
-  if (A.error) { root.replaceChildren(h('div', { class: 'av' }, h('p', { class: 'note', text: 'The authentication analysis failed: ' + A.error }))); return; }
-  const fails = A.events.filter(v => !v.normal), normals = A.events.filter(v => v.normal);
-  fails.sort((a, b) => (!!a.recovered - !!b.recovered) || a.e.start - b.e.start);
-  const toks = [...A.tokens.values()];
-  root.replaceChildren(h('div', { class: 'av' },
-    h('div', { class: 'verdict ' + (fails.some(v => !v.recovered) ? 'bad' : fails.length ? 'warn' : 'good') },
-      h('div', { class: 'vt', text: fails.length ? fails.length + ' authentication failure' + (fails.length > 1 ? 's' : '') : '✓ No authentication failures' }),
-      h('p', { text: verdictText() }),
-      h('div', { class: 'vbtns' },
-        h('button', { id: 'auth-copy', onclick: () => copyText(authReport()), text: 'Copy report' }),
-        h('button', { id: 'auth-dl', onclick: () => download(S.fileName.replace(/\.(har|json)$/i, '') + '-auth-report.md', authReport(), 'text/markdown'), text: 'Download report' }),
-        h('span', { class: 'muted', text: 'The report leaves out tokens, passwords, cookie values and keys.' }))),
-    A.notes.map(n => h('div', { class: 'anote', text: n })),
-    h('h3', { text: 'Failures' }),
-    fails.length ? fails.map(v => eventCard(v)) : h('p', { class: 'muted', text: 'None.' }),
-    normals.length ? h('details', { class: 'normals' }, h('summary', { text: 'Normal challenge steps (' + normals.length + ')' }), normals.map(v => eventCard(v))) : null,
-    h('h3', { text: 'Sign-in flows' }),
-    A.flows.length ? A.flows.map(flowCard) : h('p', { class: 'muted', text: 'No OAuth / OpenID Connect, SAML, NTLM or Kerberos exchanges found.' }),
-    h('h3', { text: 'Authentication methods by host' }),
-    A.hosts.size ? h('table', { class: 'simple' }, h('colgroup', null, h('col', { style: { width: '34%' } }), h('col')),
-      h('thead', null, h('tr', null, h('th', { text: 'Host' }), h('th', { text: 'Methods (requests)' }))),
-      h('tbody', null, [...A.hosts].map(([host, m]) => h('tr', null, h('td', { class: 'url', text: host }), h('td', null, [...m].map(([k, n]) => h('span', { class: 'mchip', text: k + ' (' + n + ')' }))))))) : h('p', { class: 'muted', text: 'No credentials found in this HAR.' }),
-    h('h3', { text: 'Tokens' }),
-    toks.length ? h('table', { class: 'simple tokens' },
-      h('colgroup', null, h('col', { style: { width: '150px' } }), h('col', { style: { width: '80px' } }), h('col'), h('col'), h('col'), h('col', { style: { width: '170px' } }), h('col', { style: { width: '110px' } })),
-      h('thead', null, h('tr', null, ['Token', 'Kind', 'Issuer', 'Audience', 'Scopes / roles', 'Expires', 'Used'].map(x => h('th', { text: x })))),
-      h('tbody', null, toks.map(t => {
-        const p = t.jwt && t.jwt.payload, expiredUses = p && p.exp ? t.uses.filter(e => p.exp * 1000 <= entryTime(e)).length : 0;
-        return h('tr', null, h('td', { class: 'mono', text: t.fp }), h('td', { text: [...t.kinds].join(' / ') || 'sent' + (t.jwt ? '' : ' (opaque)') }),
-          h('td', { text: p ? p.iss || '' : '' }), h('td', { text: p ? [].concat(p.aud || []).join(', ') : '' }), h('td', { text: p ? [...scopesOf(p)].join(' ') : '' }),
-          h('td', { text: p && p.exp ? fmtDate(p.exp * 1000) : '' }),
-          h('td', null, t.uses.length + '×', expiredUses ? h('span', { class: 'errtxt', text: ' (' + expiredUses + ' after expiry)' }) : null));
-      }))) : h('p', { class: 'muted', text: 'No tokens found.' })));
-}
-
-/* ---------- Auth tab in the request details ---------- */
-const hasAuthInfo = e => !!(e.auth || e.oauthRole || e.saml);
-function claimsKv(jwt, e) {
-  if (jwt.encrypted) return h('p', { class: 'note', text: 'Encrypted JWT (JWE): its claims cannot be read without the key. alg ' + jwt.header.alg + ', enc ' + jwt.header.enc + '.' });
-  const rows = [['header.alg', jwt.header.alg], jwt.header.typ ? ['header.typ', jwt.header.typ] : null, jwt.header.kid ? ['header.kid', jwt.header.kid] : null];
-  for (const [k, v] of Object.entries(jwt.payload || {})) {
-    let s = typeof v === 'object' ? JSON.stringify(v) : String(v);
-    if (/^(exp|iat|nbf|auth_time)$/.test(k) && typeof v === 'number') { const d = v * 1000 - entryTime(e); s = fmtDate(v * 1000) + '  (' + fmtDelta(d) + (d >= 0 ? ' after' : ' before') + ' this request)'; }
-    rows.push([k, s]);
-  }
-  return kvList(rows.filter(Boolean));
-}
-function authDetail(e) {
-  const out = [], a = e.auth || { creds: [], ch: [], pch: [] };
-  if (a.event) out.push(eventCard(a.event, true));
-  out.push(h('h4', { text: 'Credentials sent' }));
-  if (!a.creds.length) out.push(h('p', { class: 'note', text: 'None (no Authorization or Proxy-Authorization header, API key or session cookie).' }));
-  for (const c of a.creds) {
-    out.push(h('p', { class: 'credl', text: c.label }));
-    const rows = [['Method', c.method]];
-    if (c.user != null) rows.push(['User', c.user]);
-    if (c.pwLen != null) rows.push(['Password', c.pwLen ? c.pwLen + ' characters (not shown)' : 'empty']);
-    if (c.neg && c.neg.ntlm) { const n = c.neg.ntlm; rows.push(['NTLM message', 'type ' + n.type]); if (n.type === 3) rows.push(['Domain', n.domain || '(none)'], ['User', n.user || '(anonymous)'], ['Workstation', n.workstation || ''], ['Response', n.version + ' (' + n.ntLen + ' bytes)']); }
-    if (c.aws) rows.push(['Access key', maskId(c.aws.key)], ['Date', c.aws.date || ''], ['Region', c.aws.region || ''], ['Service', c.aws.service || '']);
-    if (c.presign) rows.push(['Signed', fmtDate(c.presign.signed)], ['Valid until', fmtDate(c.presign.expires)]);
-    if (c.sas) rows.push(['Permissions', c.sas.perms], ['Valid from', fmtDate(c.sas.start)], ['Valid until', fmtDate(c.sas.expiry)]);
-    out.push(kvList(rows));
-    if (c.jwt) { out.push(h('p', { class: 'note', text: 'Decoded token claims (the signature is not verified):' })); out.push(claimsKv(c.jwt, e)); }
-  }
-  if (a.ch.length || a.pch.length) { out.push(h('h4', { text: 'Server challenge' })); for (const c of a.ch) out.push(h('p', { class: 'mono', text: 'WWW-Authenticate: ' + challengeText(c) })); for (const c of a.pch) out.push(h('p', { class: 'mono', text: 'Proxy-Authenticate: ' + challengeText(c) })); }
-  if (e.oauthRole === 'token' && e.tokenReq) {
-    out.push(h('h4', { text: 'OAuth token request' }));
-    out.push(kvList(Object.entries(e.tokenReq).map(([k, v]) => [k, SECRET_FIELD.test(k) ? fp(v) + ' (hidden)' : typeof v === 'object' ? JSON.stringify(v) : v])));
-  }
-  if (e.oauthRole === 'authorize') { out.push(h('h4', { text: 'OAuth authorization request' })); out.push(kvList([...e.u.searchParams].map(([k, v]) => [k, v]))); }
-  if (e.flow) out.push(h('h4', { text: 'Part of this sign-in flow' }), flowCard(e.flow));
-  if (e.saml) {
-    const i = e.saml.info;
-    out.push(h('h4', { text: 'SAML response' }), kvList([['Status', i.status + (i.subStatus ? ' / ' + i.subStatus : '')], ['Message', i.message], ['Issuer', i.issuer], ['NameID', i.nameId], ['Destination', i.destination], ['InResponseTo', i.inResponseTo], ['Audience', i.audiences.join(', ')], ['Valid', fmtDate(i.notBefore) + ' → ' + fmtDate(i.notOnOrAfter)], ['Signed', i.signed ? 'yes' : 'no'], ['Encrypted assertion', i.encrypted ? 'yes' : 'no']].filter(r => r[1])));
-  }
-  return out;
-}
-
-/* ======================================================================
-   Diagnostics: CORS, network/TLS errors, server and gateway errors,
-   rate limiting and retries, hidden failures and API errors, redirects,
-   WebSockets/SSE, hangs, caching/CDN, page-load performance, security.
-   Each check turns evidence in the HAR into an event with ranked causes.
-   ====================================================================== */
+// ---- src/core/diag.js ----
 const DCATS = [
   ['cors', 'CORS'], ['network', 'Network & TLS errors'], ['server', 'Server & gateway errors'], ['ratelimit', 'Rate limiting & retries'],
   ['hidden', 'Hidden failures & API errors'], ['redirect', 'Redirects'], ['realtime', 'WebSockets & streaming'], ['hang', 'Hangs & incomplete requests'],
@@ -3151,46 +2550,7 @@ function runDiagnostics() {
 
 /* ---------- Diagnose view ---------- */
 const dSevRank = { error: 0, warn: 1, info: 2 };
-function dCard(v, inDetail) {
-  const c0 = v.causes[0], fx = fixesOf(v);
-  return h('div', { class: 'acard ' + (v.normal ? 'normal' : v.sev === 'error' ? 'fail' : v.sev === 'warn' ? 'recovered' : 'normal'), 'data-cause': c0 ? c0.id : '', 'data-cat': v.cat },
-    h('div', { class: 'ahead' },
-      h('span', { class: 'sev ' + (v.normal ? 'info' : v.sev), text: DCAT_LABEL[v.cat] }),
-      h('b', { text: v.headline }),
-      h('span', { class: 'spacer' }),
-      v.e && !inDetail ? h('a', { href: '#', text: '#' + v.e.i + ' · +' + fmtMs(v.e.start), onclick: ev => { ev.preventDefault(); openRequest(v.e, 'diag'); } }) : null),
-    v.e && !inDetail ? h('div', { class: 'aurl', text: v.e.method + ' ' + v.e.url }) : null,
-    c0 ? causeBlock(c0) : null,
-    v.causes.length > 1 ? h('details', { class: 'more' }, h('summary', { text: 'Other causes (' + (v.causes.length - 1) + ')' }), v.causes.slice(1).map(c => causeBlock(c, true))) : null,
-    v.evidence.length ? h('div', { class: 'evi' }, h('div', { class: 'k', text: 'Evidence' }), h('ul', null, v.evidence.slice(0, 12).map(x => h('li', { text: x })))) : null,
-    v.related.length && !inDetail ? h('div', { class: 'evi' }, h('div', { class: 'k', text: 'Related requests' }), h('div', { class: 'rel' }, v.related.slice(0, 40).map(x => stepLink(x)), v.related.length > 40 ? ' … +' + (v.related.length - 40) : null)) : null,
-    fx.length ? h('div', { class: 'evi' }, h('div', { class: 'k', text: 'What to try' }), h('ul', null, fx.map(x => h('li', { text: x })))) : null);
-}
 function diagCounts() { const m = new Map(); for (const v of D.events) if (!v.normal && v.sev !== 'info') m.set(v.cat, (m.get(v.cat) || 0) + 1); return m; }
-function renderDiag() {
-  const root = $('#view-diag');
-  const real = D.events.filter(v => !v.normal), counts = diagCounts();
-  const problems = real.filter(v => v.sev !== 'info').length;
-  root.replaceChildren(h('div', { class: 'av' },
-    h('div', { class: 'verdict ' + (real.some(v => v.sev === 'error') ? 'bad' : problems ? 'warn' : 'good') },
-      h('div', { class: 'vt', text: problems ? problems + ' problem' + (problems > 1 ? 's' : '') + ' diagnosed' : '✓ No problems diagnosed' }),
-      h('p', { text: diagSummaryText() }),
-      h('div', { class: 'vbtns' },
-        h('button', { id: 'diag-copy', onclick: () => copyText(diagReport()), text: 'Copy report' }),
-        h('button', { id: 'diag-dl', onclick: () => download(S.fileName.replace(/\.(har|json)$/i, '') + '-diagnosis.md', diagReport(), 'text/markdown'), text: 'Download report' }),
-        h('span', { class: 'muted', text: 'Covers everything except authentication, which has its own tab and report.' }))),
-    D.error ? h('div', { class: 'anote', text: 'Some checks could not run: ' + D.error }) : null,
-    h('div', { class: 'dnav' }, DCATS.map(([k, l]) => { const n = D.events.filter(v => v.cat === k).length, p = counts.get(k) || 0; return n ? h('a', { href: '#', class: 'mchip' + (p ? ' hot' : ''), onclick: ev => { ev.preventDefault(); const s = document.getElementById('dsec-' + k); if (s) s.scrollIntoView({ block: 'start' }); }, text: l + (p ? ' (' + p + ')' : ' (notes)') }) : null; })),
-    DCATS.map(([k, l]) => {
-      const list = D.events.filter(v => v.cat === k).sort((a, b) => (a.normal - b.normal) || dSevRank[a.sev] - dSevRank[b.sev] || ((a.e ? a.e.start : 0) - (b.e ? b.e.start : 0)));
-      if (!list.length) return null;
-      const main = list.filter(v => !v.normal && v.sev !== 'info'), notes = list.filter(v => v.normal || v.sev === 'info');
-      return h('section', { id: 'dsec-' + k, class: 'dsec' }, h('h3', { text: l }),
-        main.map(v => dCard(v)),
-        notes.length ? h('details', { class: 'normals', open: main.length ? null : true }, h('summary', { text: (main.length ? 'Notes and harmless items' : 'Notes') + ' (' + notes.length + ')' }), notes.map(v => dCard(v))) : null);
-    }),
-    real.length ? null : h('p', { class: 'muted', text: 'Nothing to report.' })));
-}
 function diagSummaryText() {
   const counts = diagCounts();
   if (!counts.size) return 'No CORS, network, server, API, redirect, caching, real-time, hang or security problems found. Informational notes may be listed below.';
@@ -3222,22 +2582,14 @@ function diagReport() {
    Requests are matched by method + host + path with IDs and hashes
    replaced by placeholders + the names of the query parameters.
    ====================================================================== */
-const CMP = { b: null, text: '' };
+
+// ---- src/core/compare.js ----
 function normPath(u) {
   return u.pathname.split('/').map(s => /^\d+$/.test(s) ? ':n' : /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s) ? ':uuid' : /^[0-9a-f]{16,}$/i.test(s) ? ':hash' : (s.length >= 20 && /\d/.test(s) && /^[A-Za-z0-9_-]+$/.test(s)) ? ':id' : s).join('/').replace(/[.\-_][0-9a-f]{8,}(?=\.\w+$)/i, '.:hash');
 }
 const cmpKey = e => e.method + ' ' + (e.u ? e.u.host + normPath(e.u) + (e.u.search ? '?' + [...new Set(e.u.searchParams.keys())].sort().join('&') : '') : e.url);
 function statusSet(list) { return [...new Set(list.map(x => x.status))].sort((a, b) => a - b); }
 const fmtStatuses = s => s.map(x => x || 'failed').join(', ');
-function loadCompare(text, name) {
-  let har;
-  try { har = JSON.parse(text.replace(/^﻿/, '')); } catch (err) { toast('Could not read ' + name + ' as JSON'); return; }
-  let n; try { n = normalize(har); } catch (err) { toast(err.message); return; }
-  const creator = har.log.creator ? [har.log.creator.name, har.log.creator.version].filter(Boolean).join(' ') : '';
-  CMP.b = { name, entries: n.entries, pages: n.pages, base: n.base, creator }; CMP.text = text;
-  for (const e of n.entries) { const r = e.raw.response || {}, loc = hdr(r.headers, 'location'); if (e.status >= 300 && e.status < 400 && loc) e.redirectTarget = absUrl(loc, e.url); }
-  renderCompare(); show('compare');
-}
 function cmpHeaderDiff(a, b) {
   const out = [], rq = (e, n) => hdr(reqH(e), n), rs = (e, n) => hdr(resH(e), n);
   const checks = [
@@ -3307,6 +2659,717 @@ function compareHars(A, B) {
   r.sumA = sum(A); r.sumB = sum(B);
   return r;
 }
+
+// ---- src/ui/dom.js ----
+/* ---------- small helpers ---------- */
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  if (attrs) for (const [k, v] of Object.entries(attrs)) {
+    if (v == null || v === false) continue;
+    if (k === 'class') el.className = v;
+    else if (k === 'text') el.textContent = v;
+    else if (k === 'style') { for (const [p, pv] of Object.entries(v)) el.style.setProperty(p, pv); }
+    else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v === true ? '' : v);
+  }
+  for (const c of kids.flat(Infinity)) {
+    if (c == null || c === false) continue;
+    el.append(c instanceof Node ? c : String(c));
+  }
+  return el;
+}
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 1600);
+}
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); toast('Copied to clipboard'); return; } catch (_) { /* fall back */ }
+  const ta = h('textarea', { style: { position: 'fixed', opacity: '0' } }); ta.value = text;
+  document.body.append(ta); ta.select();
+  try { document.execCommand('copy'); toast('Copied to clipboard'); } catch (_) { toast('Copy failed'); }
+  ta.remove();
+}
+function download(name, text, type) {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const a = h('a', { href: url, download: name }); document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+// ---- src/ui/app.js ----
+async function loadText(text, name) {
+  CMP.b = null;
+  $('#loaderr').textContent = '';
+  let har;
+  try { har = JSON.parse(text.replace(/^﻿/, '')); }
+  catch (err) { showLoadError('Could not read ' + name + ' as JSON.\n' + err.message); return; }
+  let n;
+  try { n = normalize(har); } catch (err) { showLoadError(err.message); return; }
+  Object.assign(S, { text, fileName: name, har, pages: n.pages, entries: n.entries, base: n.base, selected: null, types: new Set(), sort: { key: 'start', dir: 1 } });
+  analyze();
+  try { await analyzeAuth(); } catch (err) { A.error = (err && err.message) || String(err); }
+  try { runDiagnostics(); } catch (err) { D.error = (err && err.message) || String(err); }
+  setupFilters();
+  const creator = har.log.creator ? [har.log.creator.name, har.log.creator.version].filter(Boolean).join(' ') : '';
+  $('#fileinfo').textContent = name + ' · ' + S.entries.length + ' requests' + (creator ? ' · ' + creator : '');
+  $('#fileinfo').title = $('#fileinfo').textContent;
+  $$('#tabs button').forEach(b => (b.disabled = false));
+  $('#btn-export').disabled = false;
+  $('#b-req').textContent = S.entries.length;
+  const errs = S.findings.filter(f => f.sev === 'error').length, warns = S.findings.filter(f => f.sev === 'warn').length;
+  const bf = $('#b-find'); bf.textContent = S.findings.length; bf.className = 'badge' + (errs ? ' err' : warns ? ' warn' : '');
+  const authFails = A.events.filter(v => !v.normal);
+  const ba = $('#b-auth'); ba.textContent = authFails.length; ba.className = 'badge' + (authFails.some(v => !v.recovered) ? ' err' : authFails.length ? ' warn' : '');
+  const dc = D.events.filter(v => !v.normal && v.sev !== 'info'), bd = $('#b-diag');
+  bd.textContent = dc.length; bd.className = 'badge' + (dc.some(v => v.sev === 'error') ? ' err' : dc.length ? ' warn' : '');
+  $('#btn-compare').disabled = false;
+  renderOverview(); renderFindings(); renderAuth(); renderDiag(); renderCompare(); applyFilters();
+  show('overview');
+}
+function showLoadError(msg) { show('empty'); $('#loaderr').textContent = msg; }
+function readFile(file) {
+  if (!file) return;
+  const r = new FileReader();
+  r.onload = () => loadText(String(r.result), file.name);
+  r.onerror = () => showLoadError('Could not read the file: ' + (r.error && r.error.message));
+  r.readAsText(file);
+}
+
+/* ---------- view switching ---------- */
+function show(view) {
+  S.view = view;
+  $$('section.view').forEach(s => s.classList.add('hidden'));
+  $(view === 'empty' ? '#empty' : '#view-' + view).classList.remove('hidden');
+  $$('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
+  if (view === 'requests') requestAnimationFrame(renderRows);
+}
+function openRequest(e, tab) {
+  show('requests');
+  if (!S.filtered.includes(e)) { resetFilters(); }
+  select(e, tab);
+}
+
+/* ---------- overview ---------- */
+function bars(rows, max) {
+  return rows.map(([label, n, title]) => h('div', { class: 'barrow', title: title || '' },
+    h('span', { text: label, style: { overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' } }),
+    h('div', { class: 'track' }, h('div', { class: 'fill', style: { width: (max ? n / max * 100 : 0) + '%' } })),
+    h('span', { class: 'n', text: String(n) })));
+}
+function reqTable(list, valueLabel, valueFn) {
+  return h('table', { class: 'simple' },
+    h('colgroup', null, h('col', { style: { width: '54px' } }), h('col'), h('col', { style: { width: '80px' } })),
+    h('thead', null, h('tr', null, h('th', { text: 'Status' }), h('th', { text: 'URL' }), h('th', { class: 'num', text: valueLabel }))),
+    h('tbody', null, list.map(e => h('tr', { class: 'click', onclick: () => openRequest(e) },
+      h('td', { text: e.status || 'failed' }),
+      h('td', { class: 'url', title: e.url, text: e.host + e.path }),
+      h('td', { class: 'num', text: valueFn(e) })))));
+}
+function renderOverview() {
+  const E = S.entries;
+  const failed = E.filter(isFailed).length;
+  const errs = E.filter(e => e.status >= 400).length;
+  const transfer = E.reduce((a, e) => a + e.transfer, 0);
+  const content = E.reduce((a, e) => a + e.contentSize, 0);
+  const span = E.reduce((a, e) => Math.max(a, e.start + e.time), 0);
+  const hosts = new Map();
+  for (const e of E) {
+    const k = e.host || '(none)';
+    const d = hosts.get(k) || { n: 0, bytes: 0, time: 0, errs: 0 };
+    d.n++; d.bytes += e.transfer; d.time += e.time; if (isFailed(e) || e.status >= 400) d.errs++;
+    hosts.set(k, d);
+  }
+  const card = (v, l, cls, title) => h('div', { class: 'card ' + (cls || ''), title: title || '' }, h('div', { class: 'v', text: v }), h('div', { class: 'l', text: l }));
+  const pt = S.pages.map(p => p.pageTimings || {});
+  const onLoad = pt.map(x => x.onLoad).filter(x => typeof x === 'number' && x >= 0);
+  const onDCL = pt.map(x => x.onContentLoad).filter(x => typeof x === 'number' && x >= 0);
+
+  const cards = h('div', { class: 'cards' },
+    card(String(E.length), 'requests'),
+    card(String(failed), 'failed (no response)', failed ? 'err' : ''),
+    card(String(errs), 'HTTP 4xx / 5xx', errs ? (E.some(e => e.status >= 500) ? 'err' : 'warn') : ''),
+    card(fmtBytes(transfer), 'transferred', '', fmtBytes(content) + ' uncompressed content'),
+    card(fmtMs(span), 'first request → last byte'),
+    onLoad.length ? card(fmtMs(onLoad[0]), 'page load event', '', onDCL.length ? 'DOMContentLoaded at ' + fmtMs(onDCL[0]) : '') : null,
+    card(String(hosts.size), 'domains'),
+    A.events.some(v => !v.normal) ? card(String(A.events.filter(v => !v.normal).length), 'authentication failures', 'err', 'See the Authentication tab') : null);
+
+  // Findings summary
+  const groups = groupFindings();
+  const fbox = h('div', { class: 'box' }, h('h3', { text: 'Findings' }),
+    groups.length ? h('table', { class: 'simple' },
+      h('colgroup', null, h('col', { style: { width: '62px' } }), h('col'), h('col', { style: { width: '50px' } })),
+      h('tbody', null, groups.map(g => h('tr', { class: 'click', onclick: () => { show('findings'); const d = document.getElementById('fg-' + g.code); if (d) { d.open = true; d.scrollIntoView({ block: 'start' }); } } },
+        h('td', null, h('span', { class: 'sev ' + g.sev, text: g.sev })),
+        h('td', { text: RULES[g.code].title }),
+        h('td', { class: 'num', text: String(g.items.length) })))))
+      : h('p', { class: 'allgood', text: '✓ No problems detected.' }));
+
+  const slow = [...E].sort((a, b) => b.time - a.time).slice(0, 10);
+  const big = [...E].sort((a, b) => b.transfer - a.transfer).slice(0, 10).filter(e => e.transfer > 0);
+
+  const statusCounts = new Map();
+  for (const e of E) { const k = isFailed(e) ? 'failed' : String(e.status); statusCounts.set(k, (statusCounts.get(k) || 0) + 1); }
+  const sc = [...statusCounts].sort((a, b) => b[1] - a[1]);
+  const typeCounts = new Map();
+  for (const e of E) typeCounts.set(e.type, (typeCounts.get(e.type) || 0) + 1);
+  const tc = [...typeCounts].sort((a, b) => b[1] - a[1]);
+  const hostRows = [...hosts].sort((a, b) => b[1].n - a[1].n);
+
+  const dcounts = diagCounts();
+  const dbox = h('div', { class: 'box' }, h('h3', { text: 'Diagnosis' }),
+    dcounts.size ? h('table', { class: 'simple' }, h('colgroup', null, h('col'), h('col', { style: { width: '50px' } })),
+      h('tbody', null, DCATS.filter(([k]) => dcounts.get(k)).map(([k, l]) => h('tr', { class: 'click', onclick: () => { show('diag'); const sct = document.getElementById('dsec-' + k); if (sct) sct.scrollIntoView({ block: 'start' }); } }, h('td', { text: l }), h('td', { class: 'num', text: String(dcounts.get(k)) })))))
+      : h('p', { class: 'allgood', text: '✓ Nothing diagnosed.' }),
+    A.events.some(v => !v.normal) ? h('p', { class: 'note' }, h('a', { href: '#', onclick: ev => { ev.preventDefault(); show('auth'); }, text: A.events.filter(v => !v.normal).length + ' authentication failure(s) →' })) : null);
+  $('#view-overview').replaceChildren(h('div', { class: 'ov' },
+    cards, dbox, fbox,
+    h('div', { class: 'box' }, h('h3', { text: 'Status codes' }), bars(sc.map(([k, n]) => [k, n]), sc.length ? sc[0][1] : 0),
+      h('h3', { text: 'Resource types', style: { 'margin-top': '14px' } }), bars(tc.map(([k, n]) => [TYPE_LABEL[k], n]), tc.length ? tc[0][1] : 0)),
+    h('div', { class: 'box' }, h('h3', { text: 'Slowest requests' }), reqTable(slow, 'Time', e => fmtMs(e.time))),
+    h('div', { class: 'box' }, h('h3', { text: 'Largest transfers' }), big.length ? reqTable(big, 'Size', e => fmtBytes(e.transfer)) : h('p', { class: 'muted', text: 'No size information in this HAR.' })),
+    h('div', { class: 'box wide' }, h('h3', { text: 'Domains' }),
+      h('table', { class: 'simple' },
+        h('colgroup', null, h('col'), h('col', { style: { width: '90px' } }), h('col', { style: { width: '90px' } }), h('col', { style: { width: '90px' } }), h('col', { style: { width: '90px' } })),
+        h('thead', null, h('tr', null, h('th', { text: 'Domain' }), h('th', { class: 'num', text: 'Requests' }), h('th', { class: 'num', text: 'Errors' }), h('th', { class: 'num', text: 'Transferred' }), h('th', { class: 'num', text: 'Avg time' }))),
+        h('tbody', null, hostRows.map(([k, d]) => h('tr', { class: 'click', title: 'Show requests to ' + k, onclick: () => { resetFilters(); $('#f-domain').value = k === '(none)' ? '' : k; applyFilters(); show('requests'); } },
+          h('td', { class: 'url', text: k }), h('td', { class: 'num', text: String(d.n) }),
+          h('td', { class: 'num', text: String(d.errs), style: d.errs ? { color: 'var(--err)' } : {} }),
+          h('td', { class: 'num', text: fmtBytes(d.bytes) }), h('td', { class: 'num', text: fmtMs(d.time / d.n) }))))))
+  ));
+}
+
+function renderFindings() {
+  const groups = groupFindings();
+  const LIMIT = 200;
+  $('#view-findings').replaceChildren(h('div', { class: 'fv' },
+    groups.length ? null : h('p', { class: 'allgood', text: '✓ No problems detected in this HAR.' }),
+    groups.map(g => h('details', { id: 'fg-' + g.code, open: g.sev !== 'info' ? true : null },
+      h('summary', null, h('span', { class: 'sev ' + g.sev, text: g.sev }), h('span', { class: 't', text: RULES[g.code].title }), h('span', { class: 'badge', text: String(g.items.length) })),
+      h('p', { class: 'help', text: RULES[g.code].help }),
+      h('table', { class: 'simple' },
+        h('colgroup', null, h('col', { style: { width: '50px' } }), h('col', { style: { width: '60px' } }), h('col', { style: { width: '70px' } }), h('col'), h('col', { style: { width: '32%' } })),
+        h('tbody', null, g.items.slice(0, LIMIT).map(f => h('tr', { class: 'click', onclick: () => openRequest(f.e, 'issues') },
+          h('td', { class: 'muted', text: '#' + f.e.i }),
+          h('td', { text: f.e.status || 'failed' }),
+          h('td', { text: f.e.method }),
+          h('td', { class: 'url', title: f.e.url, text: f.e.url }),
+          h('td', { text: f.detail, title: f.detail }))))),
+      g.items.length > LIMIT ? h('div', { class: 'more muted', text: '… and ' + (g.items.length - LIMIT) + ' more. Use the Requests tab with “With findings” to see all.' }) : null))));
+}
+
+/* ---------- requests: filters ---------- */
+function setupFilters() {
+  const hosts = [...new Set(S.entries.map(e => e.host).filter(Boolean))].sort();
+  $('#f-domain').replaceChildren(h('option', { value: '', text: 'All domains' }), ...hosts.map(x => h('option', { value: x, text: x })));
+  const pg = $('#f-page');
+  pg.replaceChildren(h('option', { value: '', text: 'All pages' }), ...S.pages.map(p => h('option', { value: p.id, text: (p.title || p.id || '').slice(0, 80) })));
+  pg.classList.toggle('hidden', S.pages.length < 2);
+  const present = new Set(S.entries.map(e => e.type));
+  const chips = $('#type-chips');
+  chips.replaceChildren(h('button', { class: 'chip on', 'data-type': '', text: 'All' }),
+    ...Object.keys(TYPE_LABEL).filter(k => present.has(k)).map(k => h('button', { class: 'chip', 'data-type': k, text: TYPE_LABEL[k] })));
+  resetFilters();
+}
+function resetFilters() {
+  $('#q').value = ''; $('#f-status').value = ''; $('#f-domain').value = ''; $('#f-page').value = '';
+  $('#f-issues').checked = false; $('#f-deep').checked = false; S.types.clear(); syncChips(); applyFilters();
+}
+function syncChips() {
+  $$('#type-chips .chip').forEach(c => c.classList.toggle('on', c.dataset.type ? S.types.has(c.dataset.type) : S.types.size === 0));
+}
+function parseSize(v) { const m = /^([\d.]+)\s*(b|k|kb|m|mb|g|gb)?$/i.exec(v); if (!m) return NaN; const mult = { b: 1, k: 1024, kb: 1024, m: 1048576, mb: 1048576, g: 1073741824, gb: 1073741824 }[(m[2] || 'b').toLowerCase()]; return parseFloat(m[1]) * mult; }
+function parseDur(v) { const m = /^([\d.]+)\s*(ms|s)?$/i.exec(v); if (!m) return NaN; return parseFloat(m[1]) * ((m[2] || 'ms').toLowerCase() === 's' ? 1000 : 1); }
+function parseQuery(s) {
+  return s.trim().split(/\s+/).filter(Boolean).map(tok => {
+    let neg = false;
+    if (tok.length > 1 && tok[0] === '-') { neg = true; tok = tok.slice(1); }
+    const m = /^(status|method|domain|host|type|mime|larger|slower|auth|diag):(.+)$/i.exec(tok);
+    return m ? { neg, key: m[1].toLowerCase(), val: m[2].toLowerCase() } : { neg, key: null, val: tok.toLowerCase() };
+  });
+}
+function haystack(e) {
+  if (e._hay == null) {
+    const r = e.raw.request || {}, s = e.raw.response || {};
+    const parts = [e.url];
+    for (const x of (r.headers || [])) parts.push(x.name + ': ' + x.value);
+    for (const x of (s.headers || [])) parts.push(x.name + ': ' + x.value);
+    if (r.postData && r.postData.text) parts.push(String(r.postData.text).slice(0, 200000));
+    const body = bodyText(s.content || {}); if (body) parts.push(body.slice(0, 500000));
+    e._hay = parts.join('\n').toLowerCase();
+  }
+  return e._hay;
+}
+function tokMatch(e, t, deep) {
+  const v = t.val;
+  switch (t.key) {
+    case 'status':
+      if (v === 'failed' || v === '0') return isFailed(e);
+      if (/^[1-5]xx$/.test(v)) return Math.floor(e.status / 100) === +v[0];
+      return String(e.status) === v;
+    case 'method': return e.method.toLowerCase() === v;
+    case 'domain': case 'host': return e.host.toLowerCase().includes(v);
+    case 'type': return e.type === v || TYPE_LABEL[e.type].toLowerCase().startsWith(v);
+    case 'mime': return e.mime.toLowerCase().includes(v);
+    case 'larger': return e.transfer > parseSize(v);
+    case 'slower': return e.time > parseDur(v);
+    case 'diag': return !!(e.diag && e.diag.some(x => !x.normal && (v === 'any' || x.cat === v || x.sev === v)));
+    case 'auth': return v === 'fail' ? !!(e.auth && e.auth.event && !e.auth.event.normal) : !!(e.auth || e.oauthRole || e.saml);
+    default: return (deep ? haystack(e) : e.url.toLowerCase()).includes(v);
+  }
+}
+function applyFilters() {
+  const q = parseQuery($('#q').value);
+  const st = $('#f-status').value, dom = $('#f-domain').value, pg = $('#f-page').value;
+  const issues = $('#f-issues').checked, deep = $('#f-deep').checked;
+  S.filtered = S.entries.filter(e => {
+    if (pg && e.pageref !== pg) return false;
+    if (dom && e.host !== dom) return false;
+    if (S.types.size && !S.types.has(e.type)) return false;
+    if (issues && !e.findings.length) return false;
+    if (st === 'errors' && !(isFailed(e) || e.status >= 400)) return false;
+    if (st === 'failed' && !isFailed(e)) return false;
+    if (/^\d$/.test(st) && Math.floor(e.status / 100) !== +st) return false;
+    for (const t of q) if (tokMatch(e, t, deep) === t.neg) return false;
+    return true;
+  });
+  sortFiltered();
+  S.span = S.filtered.reduce((a, e) => Math.max(a, e.start + e.time), 0);
+  S.minStart = S.filtered.reduce((a, e) => Math.min(a, e.start), Infinity);
+  if (S.minStart === Infinity) S.minStart = 0;
+  $('#count').textContent = S.filtered.length === S.entries.length ? S.entries.length + ' requests' : S.filtered.length + ' of ' + S.entries.length + ' requests';
+  renderRows();
+}
+function sortFiltered() {
+  const { key, dir } = S.sort;
+  S.filtered.sort((a, b) => {
+    let x = a[key], y = b[key];
+    if (key === 'start') { x = a.start; y = b.start; if (x === y) return (a.i - b.i) * dir; }
+    if (typeof x === 'string') return x.localeCompare(y) * dir || (a.i - b.i);
+    return ((x > y) - (x < y)) * dir || (a.i - b.i);
+  });
+  $$('#thead > div').forEach(d => {
+    const on = d.dataset.key === key;
+    d.classList.toggle('sorted', on);
+    d.textContent = d.textContent.replace(/ [▲▼]$/, '') + (on ? (dir > 0 ? ' ▲' : ' ▼') : '');
+  });
+}
+
+/* ---------- requests: virtualised table ---------- */
+const ROW_H = 26;
+function renderRows() {
+  const vp = $('#rows'), inner = $('#rows-inner');
+  if (!S.filtered.length) {
+    inner.style.height = 'auto';
+    inner.replaceChildren(h('div', { class: 'nomatch', text: S.entries.length ? 'No requests match the current filters.' : '' }));
+    return;
+  }
+  inner.style.height = S.filtered.length * ROW_H + 'px';
+  const top = vp.scrollTop, height = vp.clientHeight || 600;
+  const first = Math.max(0, Math.floor(top / ROW_H) - 8);
+  const last = Math.min(S.filtered.length, Math.ceil((top + height) / ROW_H) + 8);
+  const span = Math.max(1, S.span - S.minStart);
+  const frag = document.createDocumentFragment();
+  for (let k = first; k < last; k++) {
+    const e = S.filtered[k];
+    const sc = statusClass(e);
+    const ws = worstSev(e);
+    const left = (e.start - S.minStart) / span * 100;
+    const width = Math.max(e.time / span * 100, 0.2);
+    const t = e.timings, tot = t.blocked + t.dns + t.connect + t.send + t.wait + t.receive;
+    const segs = tot > 0 ? [['blocked', t.blocked], ['dns', t.dns], ['connect', t.tcp], ['ssl', t.ssl], ['send', t.send], ['wait', t.wait], ['receive', t.receive]]
+      .filter(s => s[1] > 0).map(s => h('span', { class: 'ph-' + s[0], style: { width: (s[1] / tot * 100) + '%' } })) : [];
+    frag.append(h('div', {
+      class: 'grid-row row' + (e === S.selected ? ' sel' : '') + (sc === 'err' ? ' st-err' : sc === 'warn' ? ' st-warn' : ''),
+      style: { top: k * ROW_H + 'px' }, 'data-k': k, title: e.url
+    },
+      h('div', { class: 'c-idx muted' }, ws ? h('span', { class: 'dot ' + ws }) : null, String(e.i)),
+      h('div', { class: 'c-status', text: isFailed(e) ? 'failed' : String(e.status) }),
+      h('div', { class: 'c-method', text: e.method }),
+      h('div', { class: 'c-domain', text: e.host }),
+      h('div', { class: 'c-path', text: S.selected ? (e.u ? (e.u.pathname.split('/').filter(Boolean).pop() || e.host) + e.u.search : e.url) : e.path }),
+      h('div', { class: 'c-type', text: TYPE_LABEL[e.type] }),
+      h('div', { class: 'c-size', text: e.fromCache && !e.transfer ? '(cache)' : fmtBytes(e.transfer) }),
+      h('div', { class: 'c-time', text: fmtMs(e.time) }),
+      h('div', { class: 'c-wf' }, h('div', { class: 'wf' }, h('div', { class: 'bar', style: { left: Math.min(left, 99.8) + '%', width: width + '%' } }, segs)))));
+  }
+  inner.replaceChildren(frag);
+}
+function select(e, tab) {
+  S.selected = e;
+  if (tab) S.dtab = tab;
+  $('#split').classList.toggle('has-detail', !!e);
+  $('#detail').classList.toggle('hidden', !e);
+  if (e) {
+    const k = S.filtered.indexOf(e), vp = $('#rows');
+    if (k >= 0) {
+      const y = k * ROW_H;
+      if (y < vp.scrollTop || y + ROW_H > vp.scrollTop + vp.clientHeight) vp.scrollTop = Math.max(0, y - vp.clientHeight / 2);
+    }
+    renderDetail();
+  }
+  renderRows();
+}
+
+const MAX_SHOW = 1_000_000;
+function prettyBody(text, mime) {
+  if (text == null) return null;
+  let out = text, note = '';
+  if (/json/i.test(mime) || /^\s*[\[{]/.test(text)) {
+    try { out = JSON.stringify(JSON.parse(text), null, 2); note = 'JSON (formatted)'; } catch (_) { /* not JSON */ }
+  }
+  if (out.length > MAX_SHOW) { note = (note ? note + ' · ' : '') + 'showing first ' + fmtBytes(MAX_SHOW) + ' of ' + fmtBytes(out.length); out = out.slice(0, MAX_SHOW); }
+  return { out, note };
+}
+function kvList(rows) {
+  if (!rows || !rows.length) return h('p', { class: 'note', text: 'None.' });
+  return h('div', { class: 'kv' }, rows.map(([k, v]) => [h('div', { class: 'k', text: k }), h('div', { class: 'v', text: v == null ? '' : String(v) })]));
+}
+function timingRows(e) {
+  const t = e.timings;
+  const phases = [
+    ['blocked', 'Queued / stalled', t.blocked], ['dns', 'DNS lookup', t.dns], ['connect', 'TCP connect', t.tcp], ['ssl', 'TLS handshake', t.ssl],
+    ['send', 'Request sent', t.send], ['wait', 'Waiting (TTFB)', t.wait], ['receive', 'Content download', t.receive]];
+  const total = Math.max(e.time, phases.reduce((a, p) => a + p[2], 0), 0.0001);
+  let offset = 0;
+  return phases.map(([k, label, v]) => {
+    const row = h('div', { class: 'trow' }, h('span', { text: label }),
+      h('div', { class: 'track' }, v > 0 ? h('span', { class: 'ph-' + k, style: { left: (offset / total * 100) + '%', width: (v / total * 100) + '%' } }) : null),
+      h('span', { class: 'n', text: v > 0 ? fmtMs(v) : '—' }));
+    offset += v;
+    return row;
+  });
+}
+function renderDetail() {
+  const e = S.selected; if (!e) return;
+  const req = e.raw.request || {}, res = e.raw.response || {};
+  const sc = statusClass(e);
+  const tabs = [['headers', 'Headers'], ['payload', 'Payload'], ['response', 'Response'], ['timing', 'Timing'], ['cookies', 'Cookies'], ['issues', 'Findings' + (e.findings.length ? ' (' + e.findings.length + ')' : '')]];
+  if (hasAuthInfo(e)) tabs.splice(5, 0, ['auth', 'Auth' + (e.auth && e.auth.event && !e.auth.event.normal ? ' ⚠' : '')]);
+  if (e.diag && e.diag.length) tabs.splice(tabs.length - 1, 0, ['diag', 'Diagnosis' + (e.diag.some(v => !v.normal && v.sev !== 'info') ? ' ⚠' : '')]);
+  if (!tabs.some(t => t[0] === S.dtab)) S.dtab = 'headers';
+
+  const body = h('div', { class: 'dbody' });
+  const fill = () => {
+    body.replaceChildren(h('div', null, detailTab(e, S.dtab)));
+    $$('.dtabs button', pane).forEach(b => b.classList.toggle('active', b.dataset.tab === S.dtab));
+  };
+  const pane = $('#detail');
+  pane.replaceChildren(
+    h('div', { class: 'dhead' },
+      h('div', { class: 'top' },
+        h('span', { class: 'status-pill ' + sc, text: isFailed(e) ? 'failed' : e.status + ' ' + e.statusText }),
+        h('b', { text: e.method }),
+        h('span', { class: 'muted', text: '#' + e.i + ' · ' + fmtMs(e.time) + ' · ' + fmtBytes(e.transfer) }),
+        h('span', { class: 'spacer' }),
+        h('button', { title: 'Copy URL', onclick: () => copyText(e.url), text: 'Copy URL' }),
+        h('button', { title: 'Copy this request as a curl command', onclick: () => copyText(toCurl(e)), text: 'Copy as cURL' }),
+        h('button', { title: 'Close (Esc)', onclick: () => select(null), text: '✕' })),
+      h('div', { class: 'url', text: e.url })),
+    h('div', { class: 'dtabs' }, tabs.map(([k, l]) => h('button', { 'data-tab': k, text: l, onclick: () => { S.dtab = k; fill(); } }))),
+    body);
+  fill();
+}
+function detailTab(e, tab) {
+  const req = e.raw.request || {}, res = e.raw.response || {}, content = res.content || {};
+  if (tab === 'headers') {
+    const started = e.raw.startedDateTime || '';
+    const chain = [];
+    let c = e; while (c.redirectFrom && chain.length < 30) { c = c.redirectFrom; if (chain.includes(c)) break; }
+    for (let x = c, n = 0; x && n < 30; x = x.redirectTo, n++) chain.push(x);
+    return [
+      h('h4', { text: 'General' }),
+      kvList([
+        ['Request URL', e.url], ['Method', e.method], ['Status', isFailed(e) ? '(failed)' : e.status + ' ' + e.statusText],
+        e.error ? ['Error', e.error] : null,
+        ['HTTP version', e.httpVersion || '—'], ['Remote address', e.serverIP || '—'], e.connection ? ['Connection ID', e.connection] : null,
+        ['Type', TYPE_LABEL[e.type] + (e.mime ? ' (' + e.mime + ')' : '')],
+        ['Started', started + (started ? '  (+' + fmtMs(e.start) + ')' : '')], ['Duration', fmtMs(e.time)],
+        ['Transferred', fmtBytes(e.transfer)], ['Content size', fmtBytes(e.contentSize)],
+        e.fromCache ? ['Served from', e.fromCache] : null,
+        e.redirectTarget ? ['Redirects to', e.redirectTarget] : null,
+        e.raw._initiator && e.raw._initiator.url ? ['Initiator', e.raw._initiator.url + (e.raw._initiator.lineNumber != null ? ':' + e.raw._initiator.lineNumber : '')] : (e.raw._initiator && e.raw._initiator.type ? ['Initiator', e.raw._initiator.type] : null),
+      ].filter(Boolean)),
+      chain.length > 1 ? [h('h4', { text: 'Redirect chain' }), h('div', { class: 'chain' }, chain.map(x => h('div', null,
+        x === e ? h('b', { text: '▶ ' + (x.status || 'failed') + '  ' + x.url }) : h('a', { href: '#', text: (x.status || 'failed') + '  ' + x.url, onclick: ev => { ev.preventDefault(); select(x); } }))))] : null,
+      h('h4', { text: 'Response headers (' + (res.headers || []).length + ')' }),
+      kvList((res.headers || []).map(x => [x.name, x.value])),
+      h('h4', { text: 'Request headers (' + (req.headers || []).length + ')' }),
+      kvList((req.headers || []).map(x => [x.name, x.value])),
+    ].flat();
+  }
+  if (tab === 'payload') {
+    const out = [h('h4', { text: 'Query string parameters' }), kvList((req.queryString || []).map(x => [x.name, x.value]))];
+    const pd = req.postData;
+    out.push(h('h4', { text: 'Request body' }));
+    if (!pd) out.push(h('p', { class: 'note', text: 'No request body.' }));
+    else {
+      if (pd.mimeType) out.push(h('p', { class: 'note', text: pd.mimeType }));
+      if (Array.isArray(pd.params) && pd.params.length) out.push(kvList(pd.params.map(p => [p.name, p.fileName ? '(file: ' + p.fileName + ')' : p.value])));
+      if (pd.text != null) {
+        let text = String(pd.text);
+        if (/x-www-form-urlencoded/i.test(pd.mimeType || '') && !(pd.params && pd.params.length)) {
+          try { out.push(kvList([...new URLSearchParams(text)])); } catch (_) { /* show raw */ }
+        }
+        const p = prettyBody(text, pd.mimeType || '');
+        if (p.note) out.push(h('p', { class: 'note', text: p.note }));
+        out.push(h('pre', { class: 'body', text: p.out }));
+      }
+    }
+    return out;
+  }
+  if (tab === 'response') {
+    const mime = content.mimeType || e.mime;
+    const out = [h('p', { class: 'note', text: [mime, content.encoding ? 'encoding: ' + content.encoding : '', content.compression ? 'saved by compression: ' + fmtBytes(content.compression) : ''].filter(Boolean).join(' · ') })];
+    if (content.text == null || content.text === '') {
+      out.push(h('p', { class: 'note', text: e.contentSize ? 'The response body was not saved in this HAR. (Some browsers omit bodies, or the HAR was exported without content.)' : 'Empty response body.' }));
+      if (content.comment) out.push(h('p', { class: 'note', text: content.comment }));
+      return out;
+    }
+    if (/^image\/(png|jpe?g|gif|webp|avif|bmp|x-icon|vnd\.microsoft\.icon|svg\+xml)$/i.test(mime)) {
+      const src = content.encoding === 'base64' ? 'data:' + mime + ';base64,' + content.text : 'data:' + mime + ';charset=utf-8,' + encodeURIComponent(content.text);
+      const dims = h('p', { class: 'note' });
+      out.push(h('img', { class: 'imgprev', src, alt: 'response image', onload: ev => { dims.textContent = ev.target.naturalWidth + ' × ' + ev.target.naturalHeight + ' px'; } }), dims);
+      return out;
+    }
+    if (content.encoding === 'base64' && !isTextMime(mime)) {
+      out.push(h('p', { class: 'note', text: 'Binary content (' + fmtBytes(Math.floor(content.text.length * 3 / 4)) + '), not shown.' }));
+      return out;
+    }
+    const p = prettyBody(bodyText(content), mime);
+    if (!p) { out.push(h('p', { class: 'note', text: 'Could not decode the body.' })); return out; }
+    if (p.note) out.push(h('p', { class: 'note', text: p.note }));
+    out.push(h('pre', { class: 'body', text: p.out }));
+    return out;
+  }
+  if (tab === 'timing') {
+    const t = e.timings;
+    const ttfbStart = t.blocked + t.dns + t.connect + t.send;
+    return [
+      h('h4', { text: 'Where the time went' }),
+      timingRows(e),
+      h('div', { class: 'trow', style: { 'margin-top': '8px', 'font-weight': '600' } }, h('span', { text: 'Total' }), h('span'), h('span', { class: 'n', text: fmtMs(e.time) })),
+      h('div', { class: 'legend' }, [['blocked', 'Queued'], ['dns', 'DNS'], ['connect', 'TCP'], ['ssl', 'TLS'], ['send', 'Send'], ['wait', 'Waiting'], ['receive', 'Download']].map(([k, l]) => h('span', null, h('i', { class: 'ph-' + k }), l))),
+      h('p', { class: 'note', text: 'Started ' + fmtMs(e.start) + ' after the first request. First byte arrived after ' + fmtMs(ttfbStart + t.wait) + '. ' +
+        (t.dns === 0 && t.connect === 0 ? 'No DNS or connect time: an existing connection was reused (or the browser did not record it). ' : '') +
+        (t.wait > Math.max(t.receive, t.blocked, t.dns, t.connect) && t.wait > 200 ? 'Most of the time was spent waiting for the server.' : '') }),
+    ].flat();
+  }
+  if (tab === 'cookies') {
+    const ck = list => list && list.length ? h('table', { class: 'simple' },
+      h('thead', null, h('tr', null, ['Name', 'Value', 'Domain', 'Path', 'Expires', 'Flags'].map(x => h('th', { text: x })))),
+      h('tbody', null, list.map(c => h('tr', null,
+        h('td', { class: 'mono', text: c.name || '' }), h('td', { class: 'mono', text: c.value || '', title: c.value || '' }),
+        h('td', { text: c.domain || '' }), h('td', { text: c.path || '' }), h('td', { text: c.expires || '' }),
+        h('td', { text: [c.httpOnly ? 'HttpOnly' : '', c.secure ? 'Secure' : '', c.sameSite ? 'SameSite=' + c.sameSite : ''].filter(Boolean).join(' ') })))))
+      : h('p', { class: 'note', text: 'None.' });
+    return [h('h4', { text: 'Sent with the request' }), ck(req.cookies), h('h4', { text: 'Set by the response' }), ck(res.cookies)];
+  }
+  if (tab === 'diag') return e.diag && e.diag.length ? [...e.diag].sort((a, b) => dSevRank[a.sev] - dSevRank[b.sev]).map(v => [v.e && v.e !== e ? h('p', { class: 'note' }, 'Part of a group; main request ', stepLink(v.e)) : null, dCard(v, v.e === e)]).flat() : [h('p', { class: 'note', text: 'Nothing diagnosed for this request.' })];
+  if (tab === 'auth') return hasAuthInfo(e) ? authDetail(e) : [h('p', { class: 'note', text: 'No authentication information on this request.' })];
+  if (tab === 'issues') {
+    if (!e.findings.length) return [h('p', { class: 'allgood', text: '✓ No findings for this request.' })];
+    return e.findings.map(f => h('div', { class: 'finding' },
+      h('div', null, h('span', { class: 'sev ' + f.sev, text: f.sev }), ' ', h('span', { class: 't', text: RULES[f.code].title })),
+      f.detail ? h('p', { class: 'mono', text: f.detail }) : null,
+      h('p', { text: RULES[f.code].help })));
+  }
+  return [];
+}
+
+function exportCsv() {
+  const cols = ['#', 'started_ms', 'method', 'status', 'status_text', 'url', 'domain', 'type', 'mime', 'transfer_bytes', 'content_bytes', 'time_ms', 'blocked_ms', 'dns_ms', 'connect_ms', 'tls_ms', 'send_ms', 'wait_ms', 'receive_ms', 'http_version', 'server_ip', 'error', 'findings'];
+  const lines = [cols.join(',')];
+  for (const e of S.filtered) {
+    const t = e.timings;
+    lines.push([e.i, Math.round(e.start), e.method, e.status, e.statusText, e.url, e.host, TYPE_LABEL[e.type], e.mime, e.transfer, e.contentSize, e.time.toFixed(1),
+      t.blocked.toFixed(1), t.dns.toFixed(1), t.tcp.toFixed(1), t.ssl.toFixed(1), t.send.toFixed(1), t.wait.toFixed(1), t.receive.toFixed(1),
+      e.httpVersion, e.serverIP, e.error, e.findings.map(f => RULES[f.code].title).join('; ')].map(csvCell).join(','));
+  }
+  download(S.fileName.replace(/\.(har|json)$/i, '') + '-requests.csv', lines.join('\r\n'), 'text/csv');
+}
+
+/* ======================================================================
+   Authentication analysis
+   Works out which authentication methods are in use, finds failed
+   authentication / authorization / sign-in attempts and explains why
+   each one failed, from evidence in the HAR.
+   ====================================================================== */
+
+// ---- src/ui/auth-view.js ----
+/* ---------- Authentication view ---------- */
+function causeBlock(c, minor) {
+  return h('div', { class: 'cause' + (minor ? ' minor' : ''), 'data-cause': c.id },
+    h('div', { class: 'ct' }, h('span', { class: 'conf ' + c.conf, text: CONF_LABEL[c.conf] }), h('span', { text: c.title })),
+    c.detail ? h('p', { text: c.detail }) : null);
+}
+function eventCard(v, inDetail) {
+  const c0 = v.causes[0], fx = fixesOf(v);
+  return h('div', { class: 'acard ' + (v.normal ? 'normal' : v.recovered ? 'recovered' : 'fail'), 'data-cause': c0 ? c0.id : '' },
+    h('div', { class: 'ahead' },
+      h('span', { class: 'sev ' + (v.normal ? 'info' : v.recovered ? 'warn' : 'error'), text: v.kind }),
+      h('b', { text: v.headline }),
+      v.recovered ? h('span', { class: 'okchip', text: 'succeeded later (#' + v.recovered.i + ')' }) : null,
+      h('span', { class: 'spacer' }),
+      inDetail ? null : h('a', { href: '#', text: '#' + v.e.i + ' · +' + fmtMs(v.e.start), onclick: ev => { ev.preventDefault(); openRequest(v.e, 'auth'); } })),
+    inDetail ? null : h('div', { class: 'aurl', text: v.e.method + ' ' + v.e.url }),
+    h('div', { class: 'kv2' }, h('span', { class: 'k', text: 'Credentials sent' }), h('span', { text: v.sent }),
+      v.expected ? [h('span', { class: 'k', text: 'Server asked for' }), h('span', { text: v.expected })] : null),
+    c0 ? causeBlock(c0) : null,
+    v.causes.length > 1 ? h('details', { class: 'more' }, h('summary', { text: 'Other possible causes (' + (v.causes.length - 1) + ')' }), v.causes.slice(1).map(c => causeBlock(c, true))) : null,
+    v.evidence.length ? h('div', { class: 'evi' }, h('div', { class: 'k', text: 'Evidence' }), h('ul', null, v.evidence.map(x => h('li', { text: x })))) : null,
+    fx.length ? h('div', { class: 'evi' }, h('div', { class: 'k', text: 'What to try' }), h('ul', null, fx.map(x => h('li', { text: x })))) : null);
+}
+function stepLink(e) { return h('a', { href: '#', text: '#' + e.i, onclick: ev => { ev.preventDefault(); openRequest(e, 'auth'); } }); }
+function flowCard(f) {
+  const bad = f.checks.some(c => c.ok === false);
+  return h('div', { class: 'acard flow' + (bad ? ' fail' : '') },
+    h('div', { class: 'ahead' }, h('span', { class: 'sev ' + (bad ? 'error' : 'info'), text: f.kind === 'saml' ? 'SAML' : f.kind === 'windows' ? 'Windows' : 'OAuth' }), h('b', { text: f.title }),
+      h('span', { class: 'muted', text: [f.idp, f.client_id ? 'client ' + f.client_id : ''].filter(Boolean).join(' · ') })),
+    h('ol', { class: 'steps' }, f.steps.map(s => h('li', null, stepLink(s.e), ' ', s.label))),
+    f.checks.length ? h('ul', { class: 'checks' }, f.checks.map(c => h('li', { class: c.ok === true ? 'ok' : c.ok === false ? 'bad' : 'info' },
+      h('span', { class: 'ic', text: c.ok === true ? '✓' : c.ok === false ? '✗' : 'i' }), h('span', { text: c.label }), c.detail ? h('span', { class: 'muted', text: ' — ' + c.detail }) : null))) : null);
+}
+function renderAuth() {
+  const root = $('#view-auth');
+  if (A.error) { root.replaceChildren(h('div', { class: 'av' }, h('p', { class: 'note', text: 'The authentication analysis failed: ' + A.error }))); return; }
+  const fails = A.events.filter(v => !v.normal), normals = A.events.filter(v => v.normal);
+  fails.sort((a, b) => (!!a.recovered - !!b.recovered) || a.e.start - b.e.start);
+  const toks = [...A.tokens.values()];
+  root.replaceChildren(h('div', { class: 'av' },
+    h('div', { class: 'verdict ' + (fails.some(v => !v.recovered) ? 'bad' : fails.length ? 'warn' : 'good') },
+      h('div', { class: 'vt', text: fails.length ? fails.length + ' authentication failure' + (fails.length > 1 ? 's' : '') : '✓ No authentication failures' }),
+      h('p', { text: verdictText() }),
+      h('div', { class: 'vbtns' },
+        h('button', { id: 'auth-copy', onclick: () => copyText(authReport()), text: 'Copy report' }),
+        h('button', { id: 'auth-dl', onclick: () => download(S.fileName.replace(/\.(har|json)$/i, '') + '-auth-report.md', authReport(), 'text/markdown'), text: 'Download report' }),
+        h('span', { class: 'muted', text: 'The report leaves out tokens, passwords, cookie values and keys.' }))),
+    A.notes.map(n => h('div', { class: 'anote', text: n })),
+    h('h3', { text: 'Failures' }),
+    fails.length ? fails.map(v => eventCard(v)) : h('p', { class: 'muted', text: 'None.' }),
+    normals.length ? h('details', { class: 'normals' }, h('summary', { text: 'Normal challenge steps (' + normals.length + ')' }), normals.map(v => eventCard(v))) : null,
+    h('h3', { text: 'Sign-in flows' }),
+    A.flows.length ? A.flows.map(flowCard) : h('p', { class: 'muted', text: 'No OAuth / OpenID Connect, SAML, NTLM or Kerberos exchanges found.' }),
+    h('h3', { text: 'Authentication methods by host' }),
+    A.hosts.size ? h('table', { class: 'simple' }, h('colgroup', null, h('col', { style: { width: '34%' } }), h('col')),
+      h('thead', null, h('tr', null, h('th', { text: 'Host' }), h('th', { text: 'Methods (requests)' }))),
+      h('tbody', null, [...A.hosts].map(([host, m]) => h('tr', null, h('td', { class: 'url', text: host }), h('td', null, [...m].map(([k, n]) => h('span', { class: 'mchip', text: k + ' (' + n + ')' }))))))) : h('p', { class: 'muted', text: 'No credentials found in this HAR.' }),
+    h('h3', { text: 'Tokens' }),
+    toks.length ? h('table', { class: 'simple tokens' },
+      h('colgroup', null, h('col', { style: { width: '150px' } }), h('col', { style: { width: '80px' } }), h('col'), h('col'), h('col'), h('col', { style: { width: '170px' } }), h('col', { style: { width: '110px' } })),
+      h('thead', null, h('tr', null, ['Token', 'Kind', 'Issuer', 'Audience', 'Scopes / roles', 'Expires', 'Used'].map(x => h('th', { text: x })))),
+      h('tbody', null, toks.map(t => {
+        const p = t.jwt && t.jwt.payload, expiredUses = p && p.exp ? t.uses.filter(e => p.exp * 1000 <= entryTime(e)).length : 0;
+        return h('tr', null, h('td', { class: 'mono', text: t.fp }), h('td', { text: [...t.kinds].join(' / ') || 'sent' + (t.jwt ? '' : ' (opaque)') }),
+          h('td', { text: p ? p.iss || '' : '' }), h('td', { text: p ? [].concat(p.aud || []).join(', ') : '' }), h('td', { text: p ? [...scopesOf(p)].join(' ') : '' }),
+          h('td', { text: p && p.exp ? fmtDate(p.exp * 1000) : '' }),
+          h('td', null, t.uses.length + '×', expiredUses ? h('span', { class: 'errtxt', text: ' (' + expiredUses + ' after expiry)' }) : null));
+      }))) : h('p', { class: 'muted', text: 'No tokens found.' })));
+}
+
+/* ---------- Auth tab in the request details ---------- */
+const hasAuthInfo = e => !!(e.auth || e.oauthRole || e.saml);
+function claimsKv(jwt, e) {
+  if (jwt.encrypted) return h('p', { class: 'note', text: 'Encrypted JWT (JWE): its claims cannot be read without the key. alg ' + jwt.header.alg + ', enc ' + jwt.header.enc + '.' });
+  const rows = [['header.alg', jwt.header.alg], jwt.header.typ ? ['header.typ', jwt.header.typ] : null, jwt.header.kid ? ['header.kid', jwt.header.kid] : null];
+  for (const [k, v] of Object.entries(jwt.payload || {})) {
+    let s = typeof v === 'object' ? JSON.stringify(v) : String(v);
+    if (/^(exp|iat|nbf|auth_time)$/.test(k) && typeof v === 'number') { const d = v * 1000 - entryTime(e); s = fmtDate(v * 1000) + '  (' + fmtDelta(d) + (d >= 0 ? ' after' : ' before') + ' this request)'; }
+    rows.push([k, s]);
+  }
+  return kvList(rows.filter(Boolean));
+}
+function authDetail(e) {
+  const out = [], a = e.auth || { creds: [], ch: [], pch: [] };
+  if (a.event) out.push(eventCard(a.event, true));
+  out.push(h('h4', { text: 'Credentials sent' }));
+  if (!a.creds.length) out.push(h('p', { class: 'note', text: 'None (no Authorization or Proxy-Authorization header, API key or session cookie).' }));
+  for (const c of a.creds) {
+    out.push(h('p', { class: 'credl', text: c.label }));
+    const rows = [['Method', c.method]];
+    if (c.user != null) rows.push(['User', c.user]);
+    if (c.pwLen != null) rows.push(['Password', c.pwLen ? c.pwLen + ' characters (not shown)' : 'empty']);
+    if (c.neg && c.neg.ntlm) { const n = c.neg.ntlm; rows.push(['NTLM message', 'type ' + n.type]); if (n.type === 3) rows.push(['Domain', n.domain || '(none)'], ['User', n.user || '(anonymous)'], ['Workstation', n.workstation || ''], ['Response', n.version + ' (' + n.ntLen + ' bytes)']); }
+    if (c.aws) rows.push(['Access key', maskId(c.aws.key)], ['Date', c.aws.date || ''], ['Region', c.aws.region || ''], ['Service', c.aws.service || '']);
+    if (c.presign) rows.push(['Signed', fmtDate(c.presign.signed)], ['Valid until', fmtDate(c.presign.expires)]);
+    if (c.sas) rows.push(['Permissions', c.sas.perms], ['Valid from', fmtDate(c.sas.start)], ['Valid until', fmtDate(c.sas.expiry)]);
+    out.push(kvList(rows));
+    if (c.jwt) { out.push(h('p', { class: 'note', text: 'Decoded token claims (the signature is not verified):' })); out.push(claimsKv(c.jwt, e)); }
+  }
+  if (a.ch.length || a.pch.length) { out.push(h('h4', { text: 'Server challenge' })); for (const c of a.ch) out.push(h('p', { class: 'mono', text: 'WWW-Authenticate: ' + challengeText(c) })); for (const c of a.pch) out.push(h('p', { class: 'mono', text: 'Proxy-Authenticate: ' + challengeText(c) })); }
+  if (e.oauthRole === 'token' && e.tokenReq) {
+    out.push(h('h4', { text: 'OAuth token request' }));
+    out.push(kvList(Object.entries(e.tokenReq).map(([k, v]) => [k, SECRET_FIELD.test(k) ? fp(v) + ' (hidden)' : typeof v === 'object' ? JSON.stringify(v) : v])));
+  }
+  if (e.oauthRole === 'authorize') { out.push(h('h4', { text: 'OAuth authorization request' })); out.push(kvList([...e.u.searchParams].map(([k, v]) => [k, v]))); }
+  if (e.flow) out.push(h('h4', { text: 'Part of this sign-in flow' }), flowCard(e.flow));
+  if (e.saml) {
+    const i = e.saml.info;
+    out.push(h('h4', { text: 'SAML response' }), kvList([['Status', i.status + (i.subStatus ? ' / ' + i.subStatus : '')], ['Message', i.message], ['Issuer', i.issuer], ['NameID', i.nameId], ['Destination', i.destination], ['InResponseTo', i.inResponseTo], ['Audience', i.audiences.join(', ')], ['Valid', fmtDate(i.notBefore) + ' → ' + fmtDate(i.notOnOrAfter)], ['Signed', i.signed ? 'yes' : 'no'], ['Encrypted assertion', i.encrypted ? 'yes' : 'no']].filter(r => r[1])));
+  }
+  return out;
+}
+
+/* ======================================================================
+   Diagnostics: CORS, network/TLS errors, server and gateway errors,
+   rate limiting and retries, hidden failures and API errors, redirects,
+   WebSockets/SSE, hangs, caching/CDN, page-load performance, security.
+   Each check turns evidence in the HAR into an event with ranked causes.
+   ====================================================================== */
+
+// ---- src/ui/diag-view.js ----
+function dCard(v, inDetail) {
+  const c0 = v.causes[0], fx = fixesOf(v);
+  return h('div', { class: 'acard ' + (v.normal ? 'normal' : v.sev === 'error' ? 'fail' : v.sev === 'warn' ? 'recovered' : 'normal'), 'data-cause': c0 ? c0.id : '', 'data-cat': v.cat },
+    h('div', { class: 'ahead' },
+      h('span', { class: 'sev ' + (v.normal ? 'info' : v.sev), text: DCAT_LABEL[v.cat] }),
+      h('b', { text: v.headline }),
+      h('span', { class: 'spacer' }),
+      v.e && !inDetail ? h('a', { href: '#', text: '#' + v.e.i + ' · +' + fmtMs(v.e.start), onclick: ev => { ev.preventDefault(); openRequest(v.e, 'diag'); } }) : null),
+    v.e && !inDetail ? h('div', { class: 'aurl', text: v.e.method + ' ' + v.e.url }) : null,
+    c0 ? causeBlock(c0) : null,
+    v.causes.length > 1 ? h('details', { class: 'more' }, h('summary', { text: 'Other causes (' + (v.causes.length - 1) + ')' }), v.causes.slice(1).map(c => causeBlock(c, true))) : null,
+    v.evidence.length ? h('div', { class: 'evi' }, h('div', { class: 'k', text: 'Evidence' }), h('ul', null, v.evidence.slice(0, 12).map(x => h('li', { text: x })))) : null,
+    v.related.length && !inDetail ? h('div', { class: 'evi' }, h('div', { class: 'k', text: 'Related requests' }), h('div', { class: 'rel' }, v.related.slice(0, 40).map(x => stepLink(x)), v.related.length > 40 ? ' … +' + (v.related.length - 40) : null)) : null,
+    fx.length ? h('div', { class: 'evi' }, h('div', { class: 'k', text: 'What to try' }), h('ul', null, fx.map(x => h('li', { text: x })))) : null);
+}
+function renderDiag() {
+  const root = $('#view-diag');
+  const real = D.events.filter(v => !v.normal), counts = diagCounts();
+  const problems = real.filter(v => v.sev !== 'info').length;
+  root.replaceChildren(h('div', { class: 'av' },
+    h('div', { class: 'verdict ' + (real.some(v => v.sev === 'error') ? 'bad' : problems ? 'warn' : 'good') },
+      h('div', { class: 'vt', text: problems ? problems + ' problem' + (problems > 1 ? 's' : '') + ' diagnosed' : '✓ No problems diagnosed' }),
+      h('p', { text: diagSummaryText() }),
+      h('div', { class: 'vbtns' },
+        h('button', { id: 'diag-copy', onclick: () => copyText(diagReport()), text: 'Copy report' }),
+        h('button', { id: 'diag-dl', onclick: () => download(S.fileName.replace(/\.(har|json)$/i, '') + '-diagnosis.md', diagReport(), 'text/markdown'), text: 'Download report' }),
+        h('span', { class: 'muted', text: 'Covers everything except authentication, which has its own tab and report.' }))),
+    D.error ? h('div', { class: 'anote', text: 'Some checks could not run: ' + D.error }) : null,
+    h('div', { class: 'dnav' }, DCATS.map(([k, l]) => { const n = D.events.filter(v => v.cat === k).length, p = counts.get(k) || 0; return n ? h('a', { href: '#', class: 'mchip' + (p ? ' hot' : ''), onclick: ev => { ev.preventDefault(); const s = document.getElementById('dsec-' + k); if (s) s.scrollIntoView({ block: 'start' }); }, text: l + (p ? ' (' + p + ')' : ' (notes)') }) : null; })),
+    DCATS.map(([k, l]) => {
+      const list = D.events.filter(v => v.cat === k).sort((a, b) => (a.normal - b.normal) || dSevRank[a.sev] - dSevRank[b.sev] || ((a.e ? a.e.start : 0) - (b.e ? b.e.start : 0)));
+      if (!list.length) return null;
+      const main = list.filter(v => !v.normal && v.sev !== 'info'), notes = list.filter(v => v.normal || v.sev === 'info');
+      return h('section', { id: 'dsec-' + k, class: 'dsec' }, h('h3', { text: l }),
+        main.map(v => dCard(v)),
+        notes.length ? h('details', { class: 'normals', open: main.length ? null : true }, h('summary', { text: (main.length ? 'Notes and harmless items' : 'Notes') + ' (' + notes.length + ')' }), notes.map(v => dCard(v))) : null);
+    }),
+    real.length ? null : h('p', { class: 'muted', text: 'Nothing to report.' })));
+}
+
+// ---- src/ui/compare-view.js ----
+const CMP = { b: null, text: '' };
+function loadCompare(text, name) {
+  let har;
+  try { har = JSON.parse(text.replace(/^﻿/, '')); } catch (err) { toast('Could not read ' + name + ' as JSON'); return; }
+  let n; try { n = normalize(har); } catch (err) { toast(err.message); return; }
+  const creator = har.log.creator ? [har.log.creator.name, har.log.creator.version].filter(Boolean).join(' ') : '';
+  CMP.b = { name, entries: n.entries, pages: n.pages, base: n.base, creator }; CMP.text = text;
+  for (const e of n.entries) { const r = e.raw.response || {}, loc = hdr(r.headers, 'location'); if (e.status >= 300 && e.status < 400 && loc) e.redirectTarget = absUrl(loc, e.url); }
+  renderCompare(); show('compare');
+}
 function cmpLink(x) { const e = x.a && x.a[0]; return e ? stepLink(e) : h('span', { class: 'muted', text: 'B #' + x.b[0].i }); }
 function renderCompare() {
   const root = $('#view-compare');
@@ -3342,6 +3405,7 @@ function renderCompare() {
     r.slower.length || r.faster.length ? [h('h3', { text: 'Timing differences' }), tbl(['Request', 'A', 'B'], [...r.slower, ...r.faster].map(s => h('tr', { class: s.mb > s.ma ? 'worse' : 'better' }, h('td', { class: 'url' }, cmpLink(s), ' ', s.k), h('td', { class: 'num', text: fmtMs(s.ma) }), h('td', { class: 'num', text: fmtMs(s.mb) }))), [null, '110px', '110px'])] : null));
 }
 
+// ---- src/ui/events.js ----
 /* ---------- events ---------- */
 $('#btn-open').onclick = $('#btn-open2').onclick = () => $('#file').click();
 $('#file').onchange = ev => { readFile(ev.target.files[0]); ev.target.value = ''; };
