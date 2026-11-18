@@ -357,8 +357,8 @@ npm run build
 `npm run check` (part of `npm test`) fails if `har-analyzer.html` is out of date.
 
 To release, set the version in `package.json`, add a `## v<version>` section to
-[`CHANGELOG.md`](CHANGELOG.md), build, and push a tag `v<version>`. The Release workflow runs
-the tests and publishes the HTML file, the CLI package and checksums (tags with a `-beta.N`
+[`CHANGELOG.md`](CHANGELOG.md), build, then either push a tag `v<version>` or create the release on GitHub (*Releases → Draft a
+new release*, new tag `v<version>`). The Release workflow runs the tests and publishes the HTML file, the CLI package and checksums (tags with a `-beta.N`
 style suffix become pre-releases).
 
 The analysis in `src/core/` uses no DOM, so the command line runs the very same code under Node.

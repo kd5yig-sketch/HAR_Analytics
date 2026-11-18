@@ -1,12 +1,20 @@
 name: Release
-# Push a tag like v1.0.0 or v1.0.0-beta.1 to publish a release. Tags with a "-" suffix
-# become pre-releases. The tag must match the version in package.json, and the release
-# notes are the CHANGELOG.md section headed "## <tag>".
+# Publish a release either by pushing a tag like v1.0.0 or v1.0.0-beta.1, or by creating the
+# release on GitHub (Releases → Draft a new release, new tag v<version>). Either way this job
+# runs the tests and attaches the HTML file, the CLI package and checksums, with the notes from
+# the CHANGELOG.md section headed "## <tag>". Tags with a "-" suffix become pre-releases. The
+# tag must match the version in package.json.
 on:
   push:
     tags: ['v*']
+  release:
+    types: [published]
 permissions:
   contents: write
+concurrency:
+  group: release-${{ github.event.release.tag_name || github.ref_name }}
+env:
+  TAG: ${{ github.event.release.tag_name || github.ref_name }}
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -16,10 +24,10 @@ jobs:
         with:
           node-version: 22
       - name: Check the tag matches package.json
-        run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+        run: test "v$(node -p "require('./package.json').version")" = "$TAG"
       - name: Release notes from CHANGELOG.md
         run: |
-          awk -v v="## ${GITHUB_REF_NAME}" '$0==v{f=1;next} /^## /{f=0} f' CHANGELOG.md > notes.md
+          awk -v v="## ${TAG}" '$0==v{f=1;next} /^## /{f=0} f' CHANGELOG.md > notes.md
           test -s notes.md
       - run: npm install
       - run: npx playwright install --with-deps chromium
@@ -27,13 +35,18 @@ jobs:
       - name: Package
         run: |
           npm pack
-          cp har-analyzer.html "har-analyzer-${GITHUB_REF_NAME}.html"
+          cp har-analyzer.html "har-analyzer-${TAG}.html"
           sha256sum har-analyzer-*.html har-analytics-*.tgz > SHA256SUMS.txt
           cat SHA256SUMS.txt
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          pre=""; case "$GITHUB_REF_NAME" in *-*) pre="--prerelease";; esac
-          gh release create "$GITHUB_REF_NAME" --verify-tag --title "HAR Analytics ${GITHUB_REF_NAME#v}" --notes-file notes.md $pre \
-            har-analyzer-*.html har-analytics-*.tgz SHA256SUMS.txt
+          pre=""; case "$TAG" in *-*) pre="--prerelease";; esac
+          files="har-analyzer-${TAG}.html $(ls har-analytics-*.tgz) SHA256SUMS.txt"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" $files --clobber
+            gh release edit "$TAG" --title "HAR Analytics ${TAG#v}" --notes-file notes.md $pre
+          else
+            gh release create "$TAG" --verify-tag --title "HAR Analytics ${TAG#v}" --notes-file notes.md $pre $files
+          fi
