@@ -3,7 +3,7 @@ on:
   push:
   pull_request:
 jobs:
-  smoke:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -12,4 +12,8 @@ jobs:
           node-version: 22
       - run: npm install
       - run: npx playwright install --with-deps chromium
+      - name: Tools for the copy-as replay test (skipped if unavailable)
+        run: |
+          pipx install httpie || true
+          sudo apt-get install -y python3-requests || true
       - run: npm test

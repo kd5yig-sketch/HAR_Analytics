@@ -113,7 +113,11 @@ await step('shows formatted JSON bodies, request payloads and image previews', a
   await page.click('#detail .dtabs button[data-tab="payload"]');
   assert.match(await page.textContent('#detail .dbody'), /"password": "hunter2"/);
   await page.click('#detail .dtabs button[data-tab="response"]');
+  await page.waitForSelector('#detail .dbody .jtree');
+  assert.match(await page.textContent('#detail .dbody .jtree'), /"access_token": /);
+  await page.click('#detail .bmode button[data-mode="raw"]');
   assert.match(await page.textContent('#detail .dbody'), /JSON \(formatted\)/);
+  await page.click('#detail .bmode button[data-mode="tree"]');
   await filterTo('logo.png', 'logo.png');
   await page.click('#rows .row');
   await page.click('#detail .dtabs button[data-tab="response"]');
@@ -140,7 +144,8 @@ await step('exports a redacted HAR with secrets removed', async () => {
   }
   const har = JSON.parse(text);
   assert.equal(har.log.entries.length, 33);
-  assert.ok(text.includes('alex@example.com'), 'non-sensitive data should be kept');
+  assert.ok(!text.includes('alex@example.com'), 'personal data (email) should be masked by default');
+  assert.ok(text.includes('https://www.shop.example.com/api/login'), 'non-sensitive data should be kept');
 });
 
 await step('exports the filtered request list as CSV', async () => {

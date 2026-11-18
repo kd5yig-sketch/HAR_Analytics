@@ -1,12 +1,33 @@
 {
-  "name": "har-analyzer",
-  "version": "1.0.0",
+  "name": "har-analytics",
+  "version": "1.0.0-beta.1",
   "description": "Offline, single-file HAR analyzer for troubleshooting HTTP/HTTPS sessions",
+  "license": "GPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kd5yig-sketch/HAR_Analytics.git"
+  },
   "private": true,
   "type": "module",
+  "bin": {
+    "har-analytics": "cli/har-analytics.mjs"
+  },
+  "files": [
+    "har-analyzer.html",
+    "cli/",
+    "tools/build.mjs",
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
-    "test": "node test/smoke.mjs",
-    "sample": "node test/make-sample.mjs"
+    "build": "node tools/build.mjs",
+    "check": "node tools/build.mjs --check",
+    "test": "npm run check && node test/smoke.mjs && node test/auth.mjs && node test/diagnose.mjs && node test/toolkit.mjs && node test/copyas.mjs && node test/cli.mjs && node test/regressions.mjs",
+    "sample": "node test/make-sample.mjs && node test/make-auth-sample.mjs && node test/make-diag-samples.mjs"
   },
   "devDependencies": {
     "playwright": "1.63.0"
