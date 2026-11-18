@@ -770,7 +770,11 @@ function jwtCauses(c, e, add) {
   if (typeof p.nbf === 'number' && p.nbf * 1000 > t + skew + 60000) add('likely', 'jwt_nbf', 'The token is not valid yet (nbf is in the future)', 'nbf is ' + fmtDate(p.nbf * 1000) + ', ' + fmtDelta(p.nbf * 1000 - t) + ' after the request: the token issuer’s clock is ahead.', ['Sync clocks (NTP) on the identity provider and the API servers, or allow a little clock skew.']);
   if (String(j.header.alg).toLowerCase() === 'none') add('likely', 'jwt_alg_none', 'The token is unsigned (alg "none")', 'Servers reject unsigned tokens.', []);
   const auds = [].concat(p.aud || []).map(String);
-  if (auds.length && e.u && !isId) {
+  const want = e.u ? expectedToken(e.u.host) : null;
+  if (want && !isId) {
+    if (want.issuer && p.iss && p.iss !== want.issuer) add('high', 'jwt_issuer_mismatch', 'The token was issued by ' + p.iss + ', but this API expects ' + want.issuer, 'From your settings for ' + want.hosts.join(', ') + '. A token from another tenant, realm or environment (e.g. staging vs. production) is rejected even when it is otherwise valid.', ['Sign in against the identity provider this API trusts (' + want.issuer + ').']);
+    if (want.audience.length && auds.length && !auds.some(a => want.audience.includes(a))) add('high', 'jwt_audience_mismatch', 'The token is for ' + auds.join(', ') + ', but this API expects ' + want.audience.join(' or '), 'From your settings for ' + want.hosts.join(', ') + '. The app requested a token for a different API (wrong scope or resource).', ['Request the token with this API’s scope / resource (' + want.audience.join(', ') + ').']);
+  } else if (auds.length && e.u && !isId) {
     const host = e.u.hostname.toLowerCase();
     const looksLikeHost = auds.every(x => /^[a-z][\w+.-]*:\/\/|^[\w-]+(\.[\w-]+)+$/i.test(x));
     const match = auds.some(x => { const h = ((/^[a-z][\w+.-]*:\/\/([^/:]+)/i.exec(x) || [null, x])[1] || '').toLowerCase(); return h === host || siteOf(h) === siteOf(host); });
@@ -987,6 +991,7 @@ async function analyzeAuth() {
   await detectSaml(byTime);
   detectNtlm(byTime);
   for (const e of byTime) {
+    if (isIgnoredHost(e.host)) continue;
     const ev = classifyAuth(e);
     if (ev) { A.events.push(ev); e.auth.event = ev; } else if (e.auth && !e.auth.creds.length && !e.auth.ch.length && !e.auth.pch.length && !e.oauthRole && !e.saml) e.auth = null;
   }

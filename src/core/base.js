@@ -126,6 +126,7 @@ const RULES = {
   duplicate: { sev: 'info', title: 'Same URL requested more than once', help: 'The same GET URL was downloaded more than once (not from cache). This may be wasted work or a sign of retry loops.' },
 };
 Object.assign(RULES, {
+  diag_rules: { sev: 'warn', title: 'Your rule matched', help: 'A custom rule from Settings matched this request. See the Diagnose tab, section Your rules.' },
   diag_hidden: { sev: 'error', title: 'Hidden failure or API error', help: 'An API failed in a way that is easy to miss (GraphQL, JSON-RPC or gRPC errors inside a 200, HTML instead of JSON, malformed JSON, "undefined" in a URL) or returned a client error such as validation, 404 or 415. See the Diagnose tab.' },
   diag_ratelimit: { sev: 'error', title: 'Rate limiting or retry storm', help: 'The server throttled the client (429 / Retry-After), or the client retried a failing request without backing off. See the Diagnose tab.' },
   diag_redirect: { sev: 'error', title: 'Redirect problem', help: 'A redirect loop, an HTTPS-to-HTTP downgrade, or a POST that lost its body on a redirect. See the Diagnose tab.' },
@@ -146,6 +147,9 @@ function pageUrlFor(e) {
 }
 
 function analyze() {
+  RULES.slow_ttfb.title = 'Slow server response (waiting > ' + fmtMs(SETTINGS.ttfbMs) + ')';
+  RULES.slow_total.title = 'Slow request (> ' + fmtMs(SETTINGS.slowMs) + ' total)';
+  RULES.slow_total.help = 'The whole request took more than ' + fmtMs(SETTINGS.slowMs) + '. See its Timing tab to find which phase dominated.';
   const F = [];
   const add = (e, code, detail) => { const f = { code, sev: RULES[code].sev, e, detail: detail || '' }; e.findings.push(f); F.push(f); };
   const byUrl = new Map();
@@ -197,8 +201,8 @@ function analyze() {
       }
     }
 
-    if (t.wait > 1000) add(e, 'slow_ttfb', fmtMs(t.wait) + ' waiting');
-    if (e.time > 3000) add(e, 'slow_total', fmtMs(e.time));
+    if (t.wait > SETTINGS.ttfbMs) add(e, 'slow_ttfb', fmtMs(t.wait) + ' waiting');
+    if (e.time > SETTINGS.slowMs) add(e, 'slow_total', fmtMs(e.time));
     if (t.dns > 200) add(e, 'slow_dns', fmtMs(t.dns));
     if (t.tcp > 500) add(e, 'slow_connect', fmtMs(t.tcp));
     if (t.ssl > 500) add(e, 'slow_tls', fmtMs(t.ssl));
@@ -218,7 +222,8 @@ function analyze() {
     }
   }
   F.sort((a, b) => SEV_ORDER[a.sev] - SEV_ORDER[b.sev]);
-  S.findings = F;
+  S.findings = SETTINGS.ignoreHosts.length ? F.filter(f => !isIgnoredHost(f.e.host)) : F;
+  if (SETTINGS.ignoreHosts.length) for (const e of S.entries) if (isIgnoredHost(e.host)) e.findings = [];
 }
 function worstSev(e) {
   let w = null;
@@ -289,7 +294,8 @@ function redactBodyText(text, mime) {
   return text;
 }
 function buildRedacted(opts) {
-  const har = JSON.parse(JSON.stringify(S.har));
+  const pats = SETTINGS.redactPatterns.map(p => new RegExp(p, 'g'));
+  const har = pats.length ? JSON.parse(JSON.stringify(S.har), (k, v) => typeof v === 'string' ? pats.reduce((s, re) => s.replace(re, RED), v) : v) : JSON.parse(JSON.stringify(S.har));
   const fixHeaders = list => (list || []).map(x => {
     const n = String(x.name);
     if (SENSITIVE_HEADER.test(n) || (opts.params && isSensitiveName(n) && !/^(accept|content|cache|access-control)/i.test(n))) return { ...x, value: RED };

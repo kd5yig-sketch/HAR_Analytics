@@ -238,3 +238,16 @@ dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top
 #loading .spin { width: 18px; height: 18px; border: 3px solid var(--accent-soft); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .more-btn { display: block; margin: 4px 0 12px; }
+
+/* Settings */
+.settings textarea { width: 100%; max-width: 760px; font-family: var(--mono); font-size: 12px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
+.settings input[type="text"], .settings input[type="number"] { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; min-width: 0; }
+.slabel { display: block; margin: 10px 0 4px; font-weight: 600; font-size: 12px; }
+.srow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; }
+.srow.tok input { flex: 1 1 200px; }
+.srow.rule { padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+.srow.rule .r-name, .srow.rule .r-msg { flex: 1 1 220px; }
+.srow.rule .r-host, .srow.rule .r-path { flex: 1 1 140px; }
+.srow.rule .r-method { width: 80px; } .srow.rule .r-value { width: 140px; }
+button.icon { padding: 2px 8px; }
+#btn-settings.on { border-color: var(--accent); }

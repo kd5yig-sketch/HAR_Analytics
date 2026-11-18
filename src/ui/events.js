@@ -66,3 +66,7 @@ $('#x-har').onclick = () => {
   download(S.fileName.replace(/\.(har|json)$/i, '') + '-redacted.har', JSON.stringify(har, null, 2), 'application/json');
   $('#dlg-export').close(); toast('Redacted HAR saved');
 };
+$('#btn-settings').onclick = () => { renderSettings(); show('settings'); };
+$('#settings-file').onchange = ev => { const f = ev.target.files[0]; ev.target.value = ''; if (f) importSettingsFile(f); };
+loadStoredSettings();
+$('#btn-settings').classList.toggle('on', settingsCount() > 0);

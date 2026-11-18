@@ -30,9 +30,11 @@
   <button id="btn-open" class="primary" title="Open a .har file">Open HAR…</button>
   <button id="btn-compare" disabled title="Compare this HAR with another one (for example a capture where things work)">Compare…</button>
   <button id="btn-export" disabled title="Export a redacted HAR or a CSV of the request list">Export…</button>
+  <button id="btn-settings" title="Tell the analyzer about your environment: your hosts, token issuers, thresholds, redaction patterns and custom rules">Settings</button>
   <button id="btn-theme" title="Switch between light and dark">Theme</button>
   <input type="file" id="file" accept=".har,.json,application/json" hidden>
   <input type="file" id="file2" accept=".har,.json,application/json" hidden>
+  <input type="file" id="settings-file" accept=".json,application/json" hidden>
 </header>
 
 <main>
@@ -100,6 +102,8 @@
   <section class="view hidden" id="view-diag"></section>
 
   <section class="view hidden" id="view-compare"></section>
+
+  <section class="view hidden" id="view-settings"></section>
 </main>
 
 <dialog id="dlg-export">

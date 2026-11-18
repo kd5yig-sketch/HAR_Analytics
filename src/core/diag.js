@@ -1,5 +1,5 @@
 const DCATS = [
-  ['cors', 'CORS'], ['network', 'Network & TLS errors'], ['server', 'Server & gateway errors'], ['ratelimit', 'Rate limiting & retries'],
+  ['rules', 'Your rules'], ['cors', 'CORS'], ['network', 'Network & TLS errors'], ['server', 'Server & gateway errors'], ['ratelimit', 'Rate limiting & retries'],
   ['hidden', 'Hidden failures & API errors'], ['redirect', 'Redirects'], ['realtime', 'WebSockets & streaming'], ['hang', 'Hangs & incomplete requests'],
   ['cache', 'Caching & CDN'], ['perf', 'Page-load performance'], ['security', 'Security hygiene'],
 ];
@@ -663,7 +663,7 @@ function diagPerf() {
     const chain = []; for (let x = deepest; x && chain.length < 12; x = parent.get(x)) chain.unshift(x);
     dAdd('perf', 'info', deepest, 'Request chain ' + chain.length + ' levels deep (' + fmtMs(deepest.start + deepest.time - chain[0].start) + ')', [C('possible', 'request_chain', 'Each request is only discovered after the previous one finished', 'Long dependency chains (HTML → script → data → script…) add up round trips.', ['Preload or prefetch resources deeper in the chain, or bundle / inline them.'])], chain.map(x => '#' + x.i + ' ' + x.host + x.path.slice(0, 90) + ' (+' + fmtMs(x.start) + ', ' + fmtMs(x.time) + ')'), chain);
   }
-  const site = siteOf(doc.u ? doc.u.hostname : ''), third = S.entries.filter(e => e.u && siteOf(e.u.hostname) !== site);
+  const site = siteOf(doc.u ? doc.u.hostname : ''), third = S.entries.filter(e => e.u && (isFirstParty(e.u.host) === null ? siteOf(e.u.hostname) !== site : !isFirstParty(e.u.host)));
   const totalBytes = S.entries.reduce((a, e) => a + e.transfer, 0), thirdBytes = third.reduce((a, e) => a + e.transfer, 0);
   if (third.length >= 10 && (thirdBytes > totalBytes * 0.3 || third.length > S.entries.length * 0.4)) {
     const hosts = new Map(); for (const e of third) { const x = hosts.get(e.host) || { n: 0, b: 0, t: 0 }; x.n++; x.b += e.transfer; x.t += e.time; hosts.set(e.host, x); }
@@ -741,14 +741,15 @@ function diagSecurity() {
 }
 
 /* ---------- run ---------- */
-const FINDING_CATS = new Set(['cors', 'hidden', 'ratelimit', 'redirect', 'realtime', 'hang', 'security', 'cache']);
+const FINDING_CATS = new Set(['rules', 'cors', 'hidden', 'ratelimit', 'redirect', 'realtime', 'hang', 'security', 'cache']);
 function runDiagnostics() {
   D.events = []; D.error = '';
   for (const e of S.entries) { e.diag = null; delete e._json; }
-  const steps = [diagCors, diagNetwork, diagServer, diagRateLimit, diagHidden, diagRedirect, diagRealtime, diagHang, diagCache, diagPerf, diagSecurity];
+  const steps = [diagRules, diagCors, diagNetwork, diagServer, diagRateLimit, diagHidden, diagRedirect, diagRealtime, diagHang, diagCache, diagPerf, diagSecurity];
   const errs = [];
   for (const f of steps) { try { f(); } catch (err) { errs.push(f.name + ': ' + ((err && err.message) || err)); } }
   D.error = errs.join('; ');
+  if (SETTINGS.ignoreHosts.length) D.events = D.events.filter(v => !(v.e && isIgnoredHost(v.e.host)) || v.cat === 'rules');
   for (const v of D.events) {
     if (v.normal || !v.e) continue;
     if (FINDING_CATS.has(v.cat) && v.sev !== 'info') { const code = v.cat === 'cors' ? 'cors' : 'diag_' + v.cat, f = { code, sev: v.sev === 'error' ? 'error' : 'warn', e: v.e, detail: v.headline }; v.e.findings.push(f); S.findings.push(f); }
