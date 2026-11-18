@@ -743,7 +743,7 @@ const FINDING_CATS = new Set(['rules', 'cors', 'hidden', 'ratelimit', 'redirect'
 function runDiagnostics() {
   D.events = []; D.error = '';
   for (const e of S.entries) { e.diag = null; delete e._json; }
-  const steps = [diagRules, diagCors, diagNetwork, diagServer, diagRateLimit, diagHidden, diagRedirect, diagRealtime, diagHang, diagCache, diagPerf, diagSecurity, diagPii];
+  const steps = [diagRules, diagCors, diagNetwork, diagNetlog, diagServer, diagRateLimit, diagHidden, diagRedirect, diagRealtime, diagHang, diagCache, diagPerf, diagSecurity, diagPii];
   const errs = [];
   for (const f of steps) { try { f(); } catch (err) { errs.push(f.name + ': ' + ((err && err.message) || err)); } }
   D.error = errs.join('; ');

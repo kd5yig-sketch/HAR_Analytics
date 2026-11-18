@@ -25,6 +25,7 @@
     <button data-view="timeline" disabled>Timeline</button>
     <button data-view="auth" disabled>Authentication <span class="badge" id="b-auth">0</span></button>
     <button data-view="compare" disabled>Compare</button>
+    <button data-view="netlog" disabled>NetLog</button>
   </nav>
   <span id="fileinfo"></span>
   <span class="spacer"></span>
@@ -36,12 +37,13 @@
   <input type="file" id="file" accept=".har,.json,application/json" hidden>
   <input type="file" id="file2" accept=".har,.json,application/json" hidden>
   <input type="file" id="settings-file" accept=".json,application/json" hidden>
+  <input type="file" id="netlog-file" accept=".json,application/json" hidden>
 </header>
 
 <main>
   <section class="view" id="empty">
     <div class="drop">
-      <h2>Drop a HAR file here</h2>
+      <h2>Drop a HAR file (or Chrome NetLog) here</h2>
       <p>or <button id="btn-open2" class="primary">choose a file…</button></p>
       <p>Inspect every request, see where the time went, and get a list of likely problems: failed requests, server errors, CORS and mixed-content issues, slow DNS/TLS/server responses, redirect chains and more.</p>
       <p>The Diagnose tab explains CORS errors, network and certificate failures, which proxy or gateway produced a 5xx, rate limiting and retry storms, errors hidden inside 200 responses, redirect loops, caching and CDN problems, slow page loads, WebSocket issues, hangs and security slips. Drop two HARs to compare them.</p>
@@ -54,6 +56,7 @@
         <b>Firefox:</b> DevTools (F12) → Network → reproduce → gear icon → “Save All As HAR”.<br>
         <b>Safari:</b> Develop → Show Web Inspector → Network → reproduce → “Export”.<br>
         Proxies such as Fiddler, Charles, mitmproxy and Burp can also export HAR.</p>
+        <p><b>Chrome NetLog</b> (for DNS, proxy, connection and certificate problems): open <code>chrome://net-export</code>, click “Start Logging to Disk”, reproduce, click “Stop Logging”, then open the .json file here, or attach it to an open HAR from the NetLog tab.</p>
         <p>HAR files can contain passwords, cookies and tokens. Use <b>Export → Redacted HAR</b> before sharing one with anyone.</p>
       </details>
     </div>
@@ -105,6 +108,8 @@
   <section class="view hidden" id="view-compare"></section>
 
   <section class="view hidden" id="view-timeline"></section>
+
+  <section class="view hidden" id="view-netlog"></section>
 
   <section class="view hidden" id="view-settings"></section>
 </main>

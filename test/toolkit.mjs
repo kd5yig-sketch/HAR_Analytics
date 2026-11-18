@@ -2,7 +2,8 @@
 // body tools, copy-as formats, timeline, sequence diagrams and NetLog.
 // Usage: node test/toolkit.mjs [screenshot-dir]
 import { createRequire } from 'node:module';
-import { readFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, mkdirSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import assert from 'node:assert/strict';
@@ -342,6 +343,61 @@ await step('sequence diagrams: failing step in red, click-through, SVG / PNG / M
   await page.click('#tabs button[data-view="auth"]');
   const rep = await download(() => page.click('#auth-dl'));
   assert.match(readFileSync(rep.path, 'utf8'), /```mermaid\nsequenceDiagram/);
+});
+
+await step('NetLog: a real Chrome NetLog opens like a HAR, with certificate facts the HAR lacks', async () => {
+  await page.setInputFiles('#file', sample('netlog-failures.json'));
+  await page.waitForFunction(() => /^netlog-failures\.json · 10 requests · Chrome NetLog/.test(document.querySelector('#fileinfo').textContent) && document.querySelector('#loading').classList.contains('hidden'));
+  await page.click('#tabs button[data-view="diag"]');
+  const net = await page.$$eval('#dsec-network .acard', cs => cs.map(c => ({ cause: c.dataset.cause, all: [...c.querySelectorAll('[data-cause]')].map(x => x.dataset.cause), text: c.textContent })));
+  const expired = net.find(c => c.all.includes('cert_expired'));
+  assert.ok(expired && /The certificate expired \d+ days before this request/.test(expired.text), 'expired certificate found from the PEM even though Chrome reported only AUTHORITY_INVALID');
+  const wrong = net.find(c => c.all.includes('cert_wrong_host'));
+  assert.ok(wrong && /The certificate is for wrong-host\.example, not localhost/.test(wrong.text));
+  assert.match(wrong.text, /Chrome’s verdict \(all problems found\): not issued by a trusted authority; issued for a different host name/);
+  assert.ok(net.some(c => c.all.includes('cert_self_signed')));
+  assert.ok(net.some(c => c.cause === 'net_NAME_NOT_RESOLVED'));
+  assert.ok(net.some(c => c.cause === 'net_CONNECTION_REFUSED'));
+  const notes = await page.$$eval('#dsec-network details.normals .acard', cs => cs.map(c => c.dataset.cause));
+  assert.ok(notes.includes('ipv6_fallback'), 'IPv6 fallback noted');
+  await page.click('#tabs button[data-view="netlog"]');
+  const nl = await page.textContent('#view-netlog');
+  assert.match(nl, /3 certificate checks \(3 with problems\)/);
+  assert.match(nl, /does-not-exist\.invalid.*net::ERR_NAME_NOT_RESOLVED/);
+  assert.match(nl, /DIRECT — 10 requests/);
+  if (shots) await page.screenshot({ path: join(shots, 'netlog.png'), fullPage: true });
+  await selectRow('wrongname');
+  await page.click('#detail .dtabs button[data-tab="transport"]');
+  const tr = await page.textContent('#detail .dbody');
+  assert.match(tr, /Certificate: wrong-host\.example \(names: wrong-host\.example\)/);
+  assert.match(tr, /Issued by: wrong-host\.example \(self-signed\), not a publicly trusted root/);
+  assert.match(tr, /\[::1\]:\d+ ✗ net::ERR_ADDRESS_UNREACHABLE/);
+  await page.fill('#q', '');
+});
+
+await step('NetLog: a truncated NetLog (logging not stopped) is repaired and flagged', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nl-'));
+  const text = readFileSync(sample('netlog-failures.json'), 'utf8');
+  writeFileSync(join(dir, 'cut.json'), text.slice(0, Math.floor(text.length * 0.8)));
+  await page.setInputFiles('#file', join(dir, 'cut.json'));
+  await page.waitForFunction(() => /^cut\.json · \d+ requests/.test(document.querySelector('#fileinfo').textContent) && document.querySelector('#loading').classList.contains('hidden'));
+  await page.click('#tabs button[data-view="netlog"]');
+  assert.match(await page.textContent('#view-netlog'), /This NetLog was cut short/);
+});
+
+await step('NetLog: attach to a Playwright HAR (status -1 failures recognized)', async () => {
+  await open('netlog-failures.har');
+  await page.click('#tabs button[data-view="findings"]');
+  assert.equal(await page.$$eval('#fg-failed tbody tr', r => r.length), 5, 'Playwright marks failures with status -1');
+  assert.ok(!(await page.$('#fg-slow_tls')), 'no bogus slow-TLS findings on plain HTTP');
+  await page.click('#tabs button[data-view="netlog"]');
+  await page.setInputFiles('#netlog-file', sample('netlog-failures.json'));
+  await page.waitForFunction(() => /Attached to this HAR: 10 of 10 requests matched/.test(document.querySelector('#view-netlog').textContent));
+  await page.click('#tabs button[data-view="diag"]');
+  assert.ok(await page.$('#dsec-network [data-cause="cert_wrong_host"]'), 'certificate facts reach the HAR diagnosis');
+  await selectRow('expired');
+  assert.ok(await page.$('#detail .dtabs button[data-tab="transport"]'));
+  await page.fill('#q', '');
 });
 
 await step('no network requests and no errors', async () => {

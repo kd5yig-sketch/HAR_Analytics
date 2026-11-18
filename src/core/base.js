@@ -83,6 +83,10 @@ function normalize(har) {
     const t = e.timings || {};
     const timings = { blocked: pos(t.blocked), dns: pos(t.dns), connect: pos(t.connect), ssl: pos(t.ssl), send: pos(t.send), wait: pos(t.wait), receive: pos(t.receive) };
     // Per the HAR spec, ssl time is included in connect time.
+    // Per the HAR spec, ssl time is included in connect time. Some exporters (e.g. Playwright)
+    // report ssl separately, or even for plain-HTTP connections: normalise both cases.
+    if (u && u.protocol === 'http:') timings.ssl = 0;
+    if (timings.ssl > timings.connect) timings.connect += timings.ssl;
     timings.tcp = Math.max(0, timings.connect - timings.ssl);
     const phaseSum = timings.blocked + timings.dns + timings.connect + timings.send + timings.wait + timings.receive;
     const mime = String(content.mimeType || hdr(res.headers, 'content-type') || '').split(';')[0].trim();
@@ -90,8 +94,9 @@ function normalize(har) {
     return {
       i: i + 1, raw: e, method: String(req.method || 'GET').toUpperCase(), url, u,
       host: u ? u.host : '', path: u ? (u.pathname + u.search) : url,
-      status: typeof res.status === 'number' ? res.status : (parseInt(res.status, 10) || 0),
-      statusText: String(res.statusText || ''), error: String(res._error || e._error || ''),
+      // Failed requests: status 0 (Chrome, Firefox) or -1 (Playwright); error text in _error or _failureText.
+      status: Math.max(0, typeof res.status === 'number' ? res.status : (parseInt(res.status, 10) || 0)),
+      statusText: String(res.statusText || ''), error: String(res._error || e._error || res._failureText || e._failureText || ''),
       mime, type: classify(e, mime, u), transfer, contentSize: pos(content.size),
       time: typeof e.time === 'number' && e.time >= 0 ? e.time : phaseSum,
       start: isNaN(starts[i]) ? 0 : starts[i] - base, timings,
@@ -352,6 +357,7 @@ function csvCell(v) { v = v == null ? '' : String(v); return /[",\n\r]/.test(v) 
 // Several checks need "requests to the same URL / host near this one". Scanning
 // S.entries for every request is quadratic, which is too slow for large HARs.
 const IDX = { of: null };
+S.netlog = null; // transport details when a Chrome NetLog was opened or attached
 function idx() {
   if (IDX.of === S.entries) return IDX;
   const byTime = [...S.entries].sort((a, b) => a.start - b.start);

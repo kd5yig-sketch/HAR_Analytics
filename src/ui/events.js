@@ -74,3 +74,4 @@ $('#dec-close').onclick = () => $('#dlg-decode').close();
 $('#diff-with').addEventListener('change', renderDiff);
 $('#diff-close').onclick = () => $('#dlg-diff').close();
 $('#x-postman').onclick = exportPostman;
+$('#netlog-file').onchange = ev => { const f = ev.target.files[0]; ev.target.value = ''; if (f) attachNetlogFile(f); };

@@ -2,13 +2,21 @@ async function loadText(text, name) {
   $('#loaderr').textContent = '';
   await stage('Reading ' + name + ' (' + fmtBytes(text.length) + ')…');
   let har;
-  try { har = JSON.parse(text.replace(/^\ufeff/, '')); }
+  text = text.replace(/^\ufeff/, '');
+  try { har = /^\s*\{\s*"constants"/.test(text.slice(0, 200)) ? parseNetLogText(text) : JSON.parse(text); }
   catch (err) { stageDone(); showLoadError('Could not read ' + name + ' as JSON.\n' + err.message); return; }
-  text = null; // let the raw text be garbage-collected; only the parsed HAR is kept
+  text = null; // let the raw text be garbage-collected; only the parsed data is kept
+  if (isNetLog(har)) {
+    await stage('Converting the NetLog (' + har.events.length.toLocaleString() + ' events)…');
+    const conv = netlogToHar(har);
+    await loadHar(conv.har, name, conv.info);
+    return;
+  }
   await loadHar(har, name);
 }
-async function loadHar(har, name) {
+async function loadHar(har, name, netlogInfo = null) {
   CMP.b = null;
+  S.netlog = netlogInfo;
   let n;
   try { await stage('Reading ' + name + '…'); n = normalize(har); } catch (err) { stageDone(); showLoadError(err.message); return; }
   Object.assign(S, { fileName: name, har, pages: n.pages, entries: n.entries, base: n.base, selected: null, types: new Set(), sort: { key: 'start', dir: 1 } });
@@ -34,7 +42,7 @@ async function loadHar(har, name) {
   const dc = D.events.filter(v => !v.normal && v.sev !== 'info'), bd = $('#b-diag');
   bd.textContent = dc.length; bd.className = 'badge' + (dc.some(v => v.sev === 'error') ? ' err' : dc.length ? ' warn' : '');
   $('#btn-compare').disabled = false;
-  renderOverview(); renderFindings(); renderAuth(); renderDiag(); renderTimeline(); renderCompare(); applyFilters();
+  renderOverview(); renderFindings(); renderAuth(); renderDiag(); renderTimeline(); renderCompare(); renderNetlog(); applyFilters();
   stageDone();
   show('overview');
 }
@@ -361,6 +369,7 @@ function renderDetail() {
   const sc = statusClass(e);
   const tabs = [['headers', 'Headers'], ['payload', 'Payload'], ['response', 'Response'], ['timing', 'Timing'], ['cookies', 'Cookies'], ['issues', 'Findings' + (e.findings.length ? ' (' + e.findings.length + ')' : '')]];
   if (hasAuthInfo(e)) tabs.splice(5, 0, ['auth', 'Auth' + (e.auth && e.auth.event && !e.auth.event.normal ? ' ⚠' : '')]);
+  if (e.raw._netlog || e.netlogLink) tabs.splice(4, 0, ['transport', 'Transport']);
   if (e.diag && e.diag.length) tabs.splice(tabs.length - 1, 0, ['diag', 'Diagnosis' + (e.diag.some(v => !v.normal && v.sev !== 'info') ? ' ⚠' : '')]);
   if (!tabs.some(t => t[0] === S.dtab)) S.dtab = 'headers';
 
@@ -480,6 +489,7 @@ function detailTab(e, tab) {
       : h('p', { class: 'note', text: 'None.' });
     return [h('h4', { text: 'Sent with the request' }), ck(req.cookies), h('h4', { text: 'Set by the response' }), ck(res.cookies)];
   }
+  if (tab === 'transport') return transportDetail(e);
   if (tab === 'diag') return e.diag && e.diag.length ? [...e.diag].sort((a, b) => dSevRank[a.sev] - dSevRank[b.sev]).map(v => [v.e && v.e !== e ? h('p', { class: 'note' }, 'Part of a group; main request ', stepLink(v.e)) : null, dCard(v, v.e === e)]).flat() : [h('p', { class: 'note', text: 'Nothing diagnosed for this request.' })];
   if (tab === 'auth') return hasAuthInfo(e) ? authDetail(e) : [h('p', { class: 'note', text: 'No authentication information on this request.' })];
   if (tab === 'issues') {
